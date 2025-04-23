@@ -82,9 +82,23 @@ void receive_file(int sock, char* filename)
         error_handling("read() error!");
 
     // 在文件末尾添加换行符
-    write(fd, "\n", 1);
+    //write(fd, "\n", 1);
 
     printf("File sent successfully: %s\n", filename);
+
+    //重新以只读方式打开文件
+    fd = open(filename, O_RDONLY);
+    if(fd == -1)
+        error_handling("File open for reading error!");
+
+    printf("\nReceived file content:\n");
+    printf("---------------------------\n");
+    while ((bytes_received = read(fd, buf, BUF_SIZE)) > 0)
+    {
+        write(STDOUT_FILENO, buf, bytes_received);  //直接输出到标准输出
+    }
+    printf("\n---------------------------\n");
+    
     close(fd);
 }
 
