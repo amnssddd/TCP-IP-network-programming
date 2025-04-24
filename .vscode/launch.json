@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "e:/Repo/Github/TCP-IP-network-programming/4.4",
-      "program": "e:/Repo/Github/TCP-IP-network-programming/4.4/build/Debug/outDebug",
+      "cwd": "e:/Repo/Github/TCP-IP-network-programming/5.3（win）",
+      "program": "e:/Repo/Github/TCP-IP-network-programming/5.3（win）/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
