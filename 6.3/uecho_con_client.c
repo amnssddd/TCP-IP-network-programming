@@ -34,6 +34,7 @@ int main(int argc, char* argv[])
     serv_adr.sin_port = htons(atoi(argv[2]));
 
     //新增connect函数
+    connect(sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr));
 
     while(1)
     {
