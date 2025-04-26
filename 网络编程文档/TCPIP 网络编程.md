@@ -4987,7 +4987,7 @@ int shutdown(int sock, int howto);
 
 这时便需要调用`shutdown`函数，**只关闭服务器的输出流（半关闭）**。这样既可以**发送`EOF`**，同时又保留了输入流，可以**接收对方数据**。
 
-#### 基于半关闭的文件传输程
+#### 基于半关闭的文件传输程序
 上述文件传输服务器端的和客户端的数据流可整理为图7-3。希望通过此例理解传递EOF的必要性和半关闭的重要性。
 
 ![](assets\QQ_1745670688564.png)
@@ -5023,6 +5023,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
+    //打开文件以向客户端传输服务器端源文件file_server.c
     fp = fopen("file_server.c", "rb");
 
     serv_sd = socket(PF_INET, SOCK_STREAM, 0);
@@ -5045,6 +5046,7 @@ int main(int argc, char* argv[])
     if(clnt_sd == -1)
         error_handling("accept() error!");
 
+    //为向客户端传输文件而编写的循环语句
     while(1)
     {
         read_cnt = fread((void*)buf, 1, BUF_SIZE, fp);
@@ -5056,7 +5058,10 @@ int main(int argc, char* argv[])
         write(clnt_sd, buf, BUF_SIZE);
     }
 
+    //发送文件后对输出流进行半关闭。这样就向客户端传输了EOF，而客户端也知道文件传输已完成
     shutdown(clnt_sd, SHUT_WR);
+
+    //只关闭了输出流，依然可以通过输入流接收数据
     read(clnt_sd, buf, BUF_SIZE);
     printf("Message from client: %s \n", buf);
 
@@ -5102,6 +5107,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
+    //创建新文件以保存服务器端传输的文件数据
     fp = fopen("receive.dat", "wb");
 
     sd = socket(PF_INET, SOCK_STREAM, 0);
@@ -5115,11 +5121,12 @@ int main(int argc, char* argv[])
 
     connect(sd, (struct sockaddr*)&serv_adr, sizeof(serv_adr));
     
+    //接收数据并保存到18行创建的文件，直到接收EOF为止
     while((read_cnt = read(sd, buf, BUF_SIZE)) != 0)
         fwrite((void*)buf, 1, read_cnt, fp);
 
     puts("Received file data");
-    write(sd, "Thank you", 10);
+    write(sd, "Thank you", 10);  //向服务器端发送“Thank you”。若服务器未关闭输入流，则可接收此消息
     fclose(fp);
     close(sd);
     return 0;
@@ -5137,5 +5144,294 @@ void error_handling(char* message)
 
  ![](assets/image.png)
 
- ![](assets/image copy.png)
+ ![](assets/imagecopy.png)
 
+
+#### 对半关闭文件传输程序的解释
+
+##### 文件发送接收逻辑
+**服务器端**
+
+1、文件打开：
+``` c
+fd = open("file_server.c", "rb");   //以二进制只读模式打开文件
+```
+2、文件读取与网络发送循环：
+``` c
+while(1)   //分块传输，每个块的大小为BUF_SIZE（30字节）
+{
+    read_cnt = fread((void*)buf, 1, BUF_SIZE, fp);  //从文件读取数据到缓冲区（读取单个字节流）
+    if(read_cnt < BUF_SIZE)    //最后一次读取（文件结束）
+    {
+        write(clnt_sd, buf, read_cnt);   //发送剩余数据
+        break;
+    }
+    write(clnt_sd, buf, BUF_SIZE);  //发送完整缓冲区数据
+}
+```
+3、半关闭连接：
+``` c
+shutdown(clnt_sd, SHUT_WR);   //关闭输出流（需接收客户端发来的字符串），发送EOF
+```
+
+**客户端**
+
+1、文件创建：
+``` c
+fp = open("receive.dat", "wb");    //以二进制写入模式创建文件
+```
+2、网络接收与文件写入循环：
+``` c
+while((read_cnt = read(sd, buf, BUF_SIZE)) != 0)  //从网络读取数据
+    fwrite((void*)buf, 1, read_cnt, fp);   //写入文件（写入单个字节流）
+```
+
+##### fread/fwrite 和 read/write
+**基本概念对比**
+
+`read`/`write` 为Unix/Linux系统调用，属于低级I/O操作，直接与文件描述符（`fd`）工作。
+``` c
+ssize_t read(int fd, void* buf, size_t count);
+ssize_t write(int fd, const void* buf, size_t count);
+```
+`fread`/`fwrite` 为C标准库函数，属于高级I/O操作，与`FILE*`指针工作。
+``` c
+size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream);
+size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream);
+```
+
+由于可以减少系统调用次数，所以`fread`/`fwrite`更为高效。
+
+##### 为什么在文件传输中使用`fread`/`fwrite`
+
+**（1）文件操作的特殊性**
+- 文件I/O通常是**块设备操作**，缓冲能显著提高性能
+- 文件系统对顺序访问有优化，缓冲利用了这一特性
+
+**（2）网络传输的特殊考虑**
+- 网络I/O需要**精确控制**每次传输的数据量
+- 网络套接字本身有内核级缓冲，再加一层用户缓冲可能适得其反
+
+**（3）代码中的合理设计**
+``` c
+//文件读取使用fread（利用缓冲）
+read_cnt = fread((void*)buf, 1, BUF_SIZE, fp);
+//网络发送使用write（直接系统调用）
+write(clnt_sd, buf, BUF_SIZE);
+```
+这种组合：
+- 从文件读取时利用缓冲减少实际磁盘操作
+- 网络发送时直接控制每次发送的数据量
+
+综上，在处理**大量小数据量**的读写时适合使用**`fread`/`fwrite`**。
+
+##### 文件 receive.dat 的内容由来
+客户端收到的文件内容是**服务器自身的源代码**
+
+**关键原因：服务器显式发送了自身的源代码文件**
+
+在服务器代码中，有以下关键逻辑：
+``` c
+fd = fopen("file_server.c", "rb");  //此处明确指定了要发送的文件
+
+/******************************************/
+while(1){
+    read_cnt = fread(buf, 1, BUF_SIZE, fp);  //读取源代码内容
+    write(clnt_sd, buf, read_cnt);    //发送给客户端
+    if(read_cnt < BUF_SIZE) break;
+}
+```
+
+**二进制模式的文件操作**
+
+服务端打开文件时使用了`"rb"`模式（二进制读）：
+``` c
+fp = open("file_server.c", "rb");   //二进制模式读取
+```
+客户端保存文件时使用了`"wb"`模式（二进制写）：
+``` c
+fp = open("receive.dat", "wb");     //二进制模式写入
+```
+
+**逐字节精确传输**
+- 服务器端使用`fread`从文件块逐块读取原始字节：
+``` c
+read_cnt = fread((void*)buf, 1, BUF_SIZE, fp);  //每次读取BUF_SIZE字节
+```
+- 客户端使用`fwrite`将接收到的字节原样写入文件：
+``` c
+fwrite((void*)buf, 1, read_cnt, fp);
+```
+- `1` 作为第二个参数表示**按单字节处理**， 确保即使文件包含特殊字符（如NULL）也能正确传输。
+
+**传输完整性保证**
+- 分块传输逻辑：
+    - 服务器循环读取文件内容并发送，直到文件结束（`read_cnt < BUF_SIZE`）：
+    ``` c
+    while(1)
+    {
+        read_cnt = fread((void*)buf, 1, BUF_SIZE, fp);
+        if(read_cnt < BUF_SIZE)
+        {
+            write(clnt_sd, buf, read_cnt);  //发送最后一块
+            break;
+        }
+        write(clnt_sd, buf, BUF_SIZE);  //发送完整块
+    }
+    ```
+    - 客户端循环接收直到收到EOF（`read()`返回0）：
+    ``` c
+    while((read_cnt = read(sd, buf, BUF_SIZE)) != 0)
+        fwrite((void*)buf, 1, read_cnt, fp);
+    ```
+- EOF的正确传递:
+    - 服务器通过 `shutdown(clt_sd, SHUT_WR)` 半关闭连接，通知客户端文件传输结束，出发客户端的 `read()` 返回0
+
+### 7.2 基于Windows的实现
+Windows平台同样通过调用`shutdown`函数完成半关闭，只是传递的参数名不同。
+``` c
+#include <winsock2.h>
+
+int shutdown(SOCKET sock, int howto);
+//成功时返回0，失败时返回SOCKET_ERROR
+```
+- `sock` 要断开的套接字句柄
+- `howto` 断开方式的信息
+
+上述函数中第二个参数的可能值及其含义可整理如下。
+- `SD_RECEIVE`：断开输入流。
+- `SD_SEND`：断开输出流。
+- `SD_BOTH`：同时断开I/O流。
+虽然这些常量名不同于Linux中的名称，但其值完全相同。`SD_RECEIVE`、`SHUT_RD`都是0，`SD_SEND`、`SHUT_WR`都是1，`SD_BOTH`、`SHUT_RDWR`都是2.当然，这些在此并没有太大意义。
+
+下面给出Windows平台下的示例。
+**`file_server_win.c`**
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+
+#define BUF_SIZE 30
+void ErrorHandling(char* message);
+
+int main(int argc, char* argv[])
+{
+    WSADATA wsaData;
+    SOCKET hServSock, hClntSock;
+    FILE* fp;
+    char buf[BUF_SIZE];
+    int readCnt;
+
+    SOCKADDR_IN servAdr, clntAdr;
+    int clntAdrSz;
+
+    if(argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    if(WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        ErrorHandling("WSAStartup() error!");
+
+    fp = fopen("file_server_win.c", "rb");
+    hServSock = socket(PF_INET, SOCK_STREAM, 0);
+
+    memset(&servAdr, 0, sizeof(servAdr));
+    servAdr.sin_family = AF_INET;
+    servAdr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servAdr.sin_port = htons(atoi(argv[1]));
+
+    bind(hServSock, (SOCKADDR*)&servAdr, sizeof(servAdr));
+    listen(hServSock, 5);
+
+    clntAdrSz = sizeof(clntAdr);
+    hClntSock = accept(hServSock, (SOCKADDR*)&clntAdr, &clntAdrSz);
+
+    while(1)
+    {
+        readCnt = fread((void*)buf, 1, BUF_SIZE, fp);
+        if(readCnt < BUF_SIZE)
+        {
+            send(hClntSock, (char*)&buf, readCnt, 0);
+            break;
+        }
+        send(hClntSock, (char*)&buf, BUF_SIZE, 0);
+    }
+
+    shutdown(hClntSock, SD_SEND);
+    recv(hClntSock, (char*)&buf, BUF_SIZE, 0);
+    printf("Message from client: %s \n", buf);
+
+    fclose(fp);
+    closesocket(hClntSock);
+    closesocket(hServSock);
+    WSACleanup();
+    return 0;
+}
+
+void ErrorHandling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+}
+```
+
+**`file_client_win.c`**
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+
+#define BUF_SIZE 30
+void ErrorHandling(char* message);
+
+int main(int argc, char* argv[])
+{
+    WSADATA wsaData;
+    SOCKET hSocket;
+    FILE* fp;
+    char buf[BUF_SIZE];
+    int readCnt;
+
+    SOCKADDR_IN servAdr;
+
+    if(argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        exit(1);
+    }
+
+    if(WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        ErrorHandling("WSAStartup() error!");
+
+    fp = fopen("receive.dat", "wb");
+    hSocket = socket(PF_INET, SOCK_STREAM, 0);
+
+    memset(&servAdr, 0, sizeof(servAdr));
+    servAdr.sin_family = AF_INET;
+    servAdr.sin_addr.s_addr = inet_addr(argv[1]);
+    servAdr.sin_port = htons(atoi(argv[2]));
+
+    connect(hSocket, (SOCKADDR*)&servAdr, sizeof(servAdr));
+
+    while ((readCnt = recv(hSocket, (char*)&buf, BUF_SIZE, 0)) != 0)
+        fwrite((void*)buf, 1, readCnt, fp);
+    
+    puts("Received file data");
+    send(hSocket, "Thank you", 10, 0);
+    fclose(fp);
+    closesocket(hSocket);
+    WSACleanup();
+    return 0;
+}
+
+void ErrorHandling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+}
+```
+运行结果及文件内容与之前的并无太大区别，故省略解析。
