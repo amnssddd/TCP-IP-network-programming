@@ -5735,3 +5735,133 @@ void error_handling(char* message)
 - `8.8.8.8` 是 Google 的公共 DNS 服务器，它配置了反向 DNS（PTR 记录）
 - 而 `74.125.19.106`（Google 的一个 IP）没有配置 PTR 记录,这意味着该IP没有反向 DNS 记录，所以 `gethostbyaddr()` 查询失败
 
+
+### 8.3 基于Windows的实现
+
+Windows平台中也有类似功能的同名函数，用法与Linux系统中一致，在此不过多赘述。
+
+``` c
+#include <winsock2.h>
+
+struct hostent * hethostbyname(const char * hostname);
+struct hostent * gethostbyaddr(const char * addr, socklen_t len, int family);
+//成功时返回hostent结构体变量地址值，失败时返回NULL指针
+```
+
+下面在Windows中的示例也大致一致，再次仅熟悉用法
+
+**`gethostbyname`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+void ErrorHandling(char* message);
+
+int main(int argc, char* argv[])
+{
+    WSADATA wsaData;
+    int i;
+    struct hostent * host;
+    
+    if(argc!=2)
+    {
+        printf("Usage: %s <addr>\n", argv[0]);
+    }
+
+    if(WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        ErrorHandling("WSAStartup() error!");
+
+    host = gethostbyname(argv[1]);
+    if(!host)
+        ErrorHandling("gethost... error!");
+
+    printf("Official name: %s \n", host->h_name);
+
+    for(i=0; host->h_aliases[i]; i++)
+        printf("Aliases %d: %s \n", i+1,host->h_aliases[i]);
+
+    printf("Address type: %s \n", 
+        (host->h_addrtype == AF_INET) ? "AF_INET" : "AF_INET6");
+
+    for(i=0; host->h_addr_list[i]; i++)
+        printf("IP addr %d: %s \n", i+1,
+            inet_ntoa(*(struct in_addr*)host->h_addr_list[i]));
+
+    WSACleanup();
+    return 0;
+}
+
+void ErrorHandling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+**`gethostbyaddr_win`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+void ErrorHandling(char* message);
+
+int main(int argc, char* argv[])
+{
+    WSADATA wsaData;
+    int i;
+    struct hostent * host;
+    struct sockaddr_in addr;
+    
+    if(argc!=2)
+    {
+        printf("Usage: %s <IP>\n", argv[0]);
+    }
+
+    if(WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        ErrorHandling("WSAStartup() error!");
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_addr.s_addr = inet_addr(argv[1]);
+    host = gethostbyaddr((char*)&addr.sin_addr, 4, AF_INET);
+    if(!host)
+        ErrorHandling("gethost... error!");
+
+    printf("Official name: %s \n", host->h_name);
+
+    for(i=0; host->h_aliases[i]; i++)
+        printf("Aliases %d: %s \n", i+1,host->h_aliases[i]);
+
+    printf("Address type: %s \n", 
+        (host->h_addrtype == AF_INET) ? "AF_INET" : "AF_INET6");
+
+    for(i=0; host->h_addr_list[i]; i++)
+        printf("IP addr %d: %s \n", i+1,
+            inet_ntoa(*(struct in_addr*)host->h_addr_list[i]));
+
+    WSACleanup();
+    return 0;
+}
+
+void ErrorHandling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：
+
+![](assets\QQ_1745784027202.png)
+
+![](assets\QQ_1745784763162.png)
+
+基于Windows的讲解到此结束。
+
+
+## 9 套接字的多种可选项
