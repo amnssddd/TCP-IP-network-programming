@@ -227,7 +227,7 @@ void error_handling(char* message)
 
 **运行结果：`hello_server.c`**
 
- ![QQ_1743608233374](E:\SoftWare\Typora\document\assets\QQ_1743608233374.png)
+ ![QQ_1743608233374](assets/QQ_1743608233374.png)
 
 正常情况下程序将停留在此状态（仅有第一行），因为服务器端调用的`accept`函数还未返回。接下来运行客户端。
 
@@ -235,7 +235,7 @@ void error_handling(char* message)
 
 **运行结果：`hello_server.c`**
 
- ![QQ_1743608245354](E:\SoftWare\Typora\document\assets\QQ_1743608245354.png)
+ ![QQ_1743608245354](assets/QQ_1743608245354.png)
 
 由此查看客户端消息传输过程，同时发现，**完成消息传输后，服务器端和客户端都停止运行**。执行过程中输入的`127.0.0.1`是运行示例用的计算机（本地计算机）的**IP地址**，`9190`为**端口号**（0～1023以外的数）。如果在**同一台计算机**中同时运行服务器端和客户端，将采用这种连接方式。但如果服务器端和客户端在**不同计算机**中运行，则需要采用**服务器端所在计算机的IP地址**。
 
@@ -253,7 +253,7 @@ void error_handling(char* message)
 
 此处的文件描述符是**系统分配给文件或套接字的整数**。实际上，学习C语言过程中用过的标准输入输出及标准错误在Linux中也被分配表1-1中的文件描述符。
 
-![QQ_1743608889386](E:\SoftWare\Typora\document\assets\QQ_1743608889386.png)
+![QQ_1743608889386](assets/QQ_1743608889386.png)
 
 文件和套接字一般经过创建过程才会被分配文件描述符。而表1-1中的3种输入输出对象即使未经过特殊的创建过程，程序开始运行后也会被自动分配文件描述符。
 
@@ -281,7 +281,7 @@ int open(const char *path, int flag);
 
 表1-2是此函数第二个参数 `flag` 可能的常量值及含义。如需传递多个参数，则应提供**位或运算**（OR）符组合并传递。
 
-![QQ_1743609538845](E:\SoftWare\Typora\document\assets\QQ_1743609538845.png)
+![QQ_1743609538845](assets/QQ_1743609538845.png)
 
 #### 关闭文件
 
@@ -333,7 +333,7 @@ close(fd);
 
 运行示例后，利用Linux的 `cat` 命令输出**data.txt**文件内容，可以确认已向文件传输数据（需要加上 `sudo`）。运行结果如下所示：
 
- ![QQ_1743944252149](E:\SoftWare\Typora\document\assets\QQ_1743944252149.png)
+ ![QQ_1743944252149](assets/QQ_1743944252149.png)
 
 
 
@@ -367,7 +367,7 @@ close(fd);
 ```
 
 运行结果如下：
- ![QQ_1743945109242](E:\SoftWare\Typora\document\assets\QQ_1743945109242.png)
+ ![QQ_1743945109242](assets/QQ_1743945109242.png)
 
 
 
@@ -387,7 +387,7 @@ printf("file descriptor3: %d\n", fd3);
 ```
 
 运行结果如下所示：
- ![QQ_1743945464454](E:\SoftWare\Typora\document\assets\QQ_1743945464454.png)
+ ![QQ_1743945464454](assets/QQ_1743945464454.png)
 
 `PF_INET`表示**IPv4协议族**。用于指定套接字使用IPv4网络协议
 
@@ -607,7 +607,7 @@ void ErrorHandling(char *message)
 }
 ```
 
- ![QQ_1743955870956](E:\SoftWare\Typora\document\assets\QQ_1743955870956.png)
+ ![QQ_1743955870956](assets/QQ_1743955870956.png)
 
 （第一次代码出错）
 
@@ -673,7 +673,7 @@ void ErrorHandling(char *message)
 }
 ```
 
- ![QQ_1743955962588](E:\SoftWare\Typora\document\assets\QQ_1743955962588.png)
+ ![QQ_1743955962588](assets/QQ_1743955962588.png)
 
 如果运行正常，则与Linux相同，程序进入**等待状态**。这是因为服务器调用了`accept`函数。接着运行客户端显示结果。
 
@@ -737,7 +737,7 @@ int socket(int domain, int type, int protocol);
 
 套接字通信中的协议有一些分类，通过`socket`函数的第一个参数传递**套接字中使用的协议分类信息**，此协议分类信息成为**协议族**，可分为如下几类：
 
-![QQ_1744036906816](E:\SoftWare\Typora\document\assets\QQ_1744036906816.png)
+![QQ_1744036906816](assets/QQ_1744036906816.png)
 
 重点讲解表2-1中`PF_INET`对应的**IPv4互联网协议族**。
 
@@ -893,7 +893,7 @@ void error_handling(char* message)
 
 运行结果如下：
 
- ![QQ_1744041692396](E:\SoftWare\Typora\document\assets\QQ_1744041692396.png)
+ ![QQ_1744041692396](assets/QQ_1744041692396.png0)
 
 从运行结果可以看出，服务器端发送了**13字节**的数据，客户端调用**13次**`read`函数进行读取。
 
@@ -997,7 +997,7 @@ void ErrorHandling(char *message)
 
 运行结果如下：
 
- ![QQ_1744043289058](E:\SoftWare\Typora\document\assets\QQ_1744043289058.png)
+ ![QQ_1744043289058](assets/QQ_1744043289058.png)
 
 
 
@@ -1024,11 +1024,11 @@ IPv4和IPv6的差别主要是**表示IP地址所用的字节数**，目前通用
 
 IPv4的4字节IP地址分为**网络地址**和**主机（指计算机）地址**，且分为A、B、C、D、E等类型。图3-1展示了IPv4地址族，一般不会使用已被预约了的E类地址，故省略。
 
-![QQ_1744097723575](E:\SoftWare\Typora\document\assets\QQ_1744097723575.png)
+![QQ_1744097723575](assets/QQ_1744097723575.png)
 
 **网络地址**（网络ID）是为了**区分网络**而设置的一部分IP地址。假设向WWW.SEML.COM公司传输数据，该公司内部构建了局域网，把所有计算机连接起来。因此，首先应向`SEMI.COM`网络传输数据，也就是说，并非一开始就浏览所有4字节的IP地址，进而找到目标主机；而是**仅浏览4字节IP地址的网络地址**，先把数据传到`SEMI.COM`的网络。`SEMI.COM`网络（构成网络的路由器）收到数据后，浏览传输数据的主机地址（主机ID）并将数据传递给目标计算机。图3-2展示了数据传输过程。
 
-<img src="E:\SoftWare\Typora\document\assets\QQ_1744098204284.png" alt="QQ_1744098204284" style="zoom:80%;" />
+<img src="assets\QQ_1744098204284.png" alt="QQ_1744098204284" style="zoom:80%;" />
 
 某主机向`203.211.172.103`和`203.211.217.202`传输数据，其中`203.211.172`和`203.211.217`为该网络的**网络地址**。所以“向相应网络传输数据”实际上是**向构成网络的路由器**（Router）**或交换机**（Switch）**传输数据**，由接收数据的**路由器**根据数据中的**主机地址**向目标主机传递数据。
 
@@ -1066,7 +1066,7 @@ IP用于区分计算机，只要有IP地址就能向目标主机传输数据，�
 
 计算机中一般配有NIC（Network Interface Card，网络接口卡）数据传输设备。通过NIC向计算机内部传输数据时会用到IP。操作系统负责把传递到内部的数据适当分配给套接字，这时就要利用端口号。也就是说，**通过NIC接收的数据有端口号**，操作系统正是参考此**端口号**把数据传输给**相应端口的套接字**，如图3-3所示。
 
-![QQ_1744114709885](E:\SoftWare\Typora\document\assets\QQ_1744114709885.png)
+![QQ_1744114709885](assets/QQ_1744114709885.png)
 
 **端口号就是在同一操作系统内为区分不同套接字而设置的**。因此无法将1个端口号分配给不同套接字。另外端口号由16位构成，**可分配的端口号为0-65535**。但**0-1023是知名端口**（Well-known PORT），一般分配给特定应用程序，所以**应当分配此范围（0-1023）之外的值**。
 
@@ -1105,7 +1105,7 @@ struct in_addr
 
 `uint16_t`、`in_addr_t`等类型可以参考POSIX（可移置操作系统接口）。POSIX是为UNIX系列操作系统设立的标准，它定义了一些其他数据类型，如表3-1所示。
 
-![QQ_1744115768432](E:\SoftWare\Typora\document\assets\QQ_1744115768432.png)
+![QQ_1744115768432](assets/QQ_1744115768432.png)
 
 此类数据类型是考虑到**扩展性**的结果。如果使用`int32_t`类型的数据，就能保证在任何时候都占用4字节即使将来用64为表示int类型也是如此。
 
@@ -1119,7 +1119,7 @@ struct in_addr
 
 每种协议族适用的**地址族**均不同。比如IPv4使用4字节地址族，IPv6使用16字节地址族。可以参考表3-2保存`sin_family`地址信息。
 
-![QQ_1744116165686](E:\SoftWare\Typora\document\assets\QQ_1744116165686.png)
+![QQ_1744116165686](assets/QQ_1744116165686.png)
 
 **成员sin_port**
 
@@ -1194,15 +1194,15 @@ struct sockaddr
 
 下面通过示例进行说明。假设0x20号开始的地址中保存4字节int类型数0x12345678.大端CPU保存方式如图3-4所示。
 
-![QQ_1744122059437](E:\SoftWare\Typora\document\assets\QQ_1744122059437.png)
+![QQ_1744122059437](assets/QQ_1744122059437.png)
 
 整数0x12345678中，0x12是最高为字节，0x78是最低位字节。因此，大端序中先保存最高位字节0x12（最高位字节0x12存放到低位地址）。小端序保存方式如图3-5所示。
 
-![QQ_1744124448296](E:\SoftWare\Typora\document\assets\QQ_1744124448296.png)
+![QQ_1744124448296](assets/QQ_1744124448296.png)
 
 先保存的是最低位字节0x78。从以上分析可以看出，每种CPU的数据保存方式均不同。因此，代表CPU数据保存方式的**主机字节序**（Host Byte Order）在不同CPU中也各不相同。目前主流的Interl系列CPU以**小端序**方式保存数据。接下来分析2台字节序不同的计算机之间数据传递过程中可能出现的问题，如图3-6所示。
 
-![QQ_1744127259631](E:\SoftWare\Typora\document\assets\QQ_1744127259631.png)
+![QQ_1744127259631](assets/QQ_1744127259631.png)
 
 0x12和0x34构成的大端序系统值与0x34和0x12构成的小端序系统值相同。换言之，只有改变**数据保存顺序**才能被识别为同一值。图3-6中，大端序系统传输数据0x1234时未考虑字节序问题，而直接以0x12、0x34的顺序发送。结果接收端以小端序方式保存数据，因此小端序接收的数据变成**0x3412**，而非0x1234。正因如此，在通过网络传输数据使约定统一方式，这种约定称为**网络字节序**（Network Byte Order），统一为**大端序**。
 
@@ -1272,7 +1272,7 @@ int main(int arcg, char *argv[])
 
 运行结果：
 
- ![QQ_1744288248847](E:\SoftWare\Typora\document\assets\QQ_1744288248847.png)
+ ![QQ_1744288248847](assets/QQ_1744288248847.png)
 
 为什么结果看起来像小端序？
 
@@ -1334,7 +1334,7 @@ int main(int argc,char * argv)
 
 运行结果：
 
- ![QQ_1744290508116](E:\SoftWare\Typora\document\assets\QQ_1744290508116.png)
+ ![QQ_1744290508116](assets/QQ_1744290508116.png)
 
 从运行结果看出，`inet_addr`函数不仅可以把IP地址转为**32位整数型**，而且可以**检测无效的IP地址**。
 
@@ -4933,9 +4933,12 @@ void ErrorHandling(char* message)
 
 上述客户端示例利用**已连接UDP套接字**进行输入输出，因此用`write`、`read`函数替换了`sendto`、`recvfrom`函数。
 
+
 ## 7 优雅地断开套接字连接
+
 ### 7.1 基于TCP的半关闭
 TCP中的连接断开过程比建立连接过程更为重要，因为连接过程中一般不会出现出现大的变数，但断开过程有可能发生意想不到的情况，因此应准确掌控。只有掌握了下面要讲解的**半关闭**（Half-close），才能明确断开过程。
+
 
 #### 单方面断开连接带来的问题
 Linux的`close`函数和Windows的`closesocket`函数意味着**完全断开连接**。完全断开不仅指无法传输数据，而且也不能接收数据。因此，在某些情况下，通信一方调用`close`或`closesocket`函数断开连接就显得不太优雅，如图7-1所示。
@@ -4944,6 +4947,7 @@ Linux的`close`函数和Windows的`closesocket`函数意味着**完全断开连�
 
 图7-1描述的是2台主机正在进行双向通信。主机A发生完最后的数据后，调用`close`函数断开了连接，之后主机A无法再接收主机B传输的数据。实际上，是完全无法调用与接收数据相关的函数。最终，由主机B传输的、主机A必须接收的数据也销毁了。
 为了解决这类问题，**只关闭一部分数据交换中使用的流**（Half-close）的方法应运而生。断开一部分连接是指，**可以传输数据但无法接收，或可以接收数据但无法传输**。顾名思义是**只关闭流的一半**。
+
 
 #### 套接字和流（Stream）
 两台主机通过套接字建立连接后进入可交换数据的状态，又称“流形成的状态”。也就是把建立套接字后**可交换数据的状态**看作一种流。
@@ -4955,6 +4959,7 @@ Linux的`close`函数和Windows的`closesocket`函数意味着**完全断开连�
 一旦两台主机建立了套接字连接，**每个主机就会拥有单独的输入流和输出流**。当然，其中一个主机的输入流与另一主机的输出流相连，而输出流与另一主机的输入流相连。
 
 本章讨论的“优雅断开连接”即**只断开其中的1个流**。
+
 
 #### 针对优雅断开的`shutdown`函数
 接下来介绍用于**半关闭**的函数。下面这个`shutdown`用来关闭其中一个流。
@@ -4974,6 +4979,7 @@ int shutdown(int sock, int howto);
 
 若向`shutdown`的第二个参数传递`SHUT_RD`，则断开输入流，套接字**无法接收数据**。即使输入缓冲收到数据也会抹去，而且无法调用输入相关函数。如果向`shutdown`函数的第二个参数传递`SHUT_WR`，则中断输出流，也就**无法传输数据**。但如果输出缓冲还留有未传输的数据，则将传递至目标主机。最后，若传入`SHUT_RDWR`，则**同时中断I/O流**。这相当于分两次调用`shutdown`函数，其中一次以`SHUT_RD`为参数，另一次以`SHUT_WR`为参数。
 
+
 #### 为何需要半关闭
 现有如下情况：
 
@@ -4986,6 +4992,7 @@ int shutdown(int sock, int howto);
 此时只剩下一个问题：服务器该如何传递`EOF`？当然，调用`close`函数的同时关闭I/O流，这样也会向对方发送EOF。但此时无法再接收对方传输的数据。换言之，若调用`close`函数关闭流，则无法接收客户端最后发送的字符串“Thank you”。
 
 这时便需要调用`shutdown`函数，**只关闭服务器的输出流（半关闭）**。这样既可以**发送`EOF`**，同时又保留了输入流，可以**接收对方数据**。
+
 
 #### 基于半关闭的文件传输程序
 上述文件传输服务器端的和客户端的数据流可整理为图7-3。希望通过此例理解传递EOF的必要性和半关闭的重要性。
@@ -5149,6 +5156,7 @@ void error_handling(char* message)
 
 #### 对半关闭文件传输程序的解释
 
+
 ##### 文件发送接收逻辑
 **服务器端**
 
@@ -5286,6 +5294,7 @@ fwrite((void*)buf, 1, read_cnt, fp);
     ```
 - EOF的正确传递:
     - 服务器通过 `shutdown(clt_sd, SHUT_WR)` 半关闭连接，通知客户端文件传输结束，出发客户端的 `read()` 返回0
+
 
 ### 7.2 基于Windows的实现
 Windows平台同样通过调用`shutdown`函数完成半关闭，只是传递的参数名不同。
@@ -5436,15 +5445,19 @@ void ErrorHandling(char* message)
 ```
 运行结果及文件内容与之前的并无太大区别，故省略解析。
 
+
 ## 8 域名及网络地址
+
 
 ### 8.1 域名系统
 
 **DNS是对IP地址和域名进行相互转换的系统，其核心是DNS服务器**
 
+
 #### 什么是域名
 
 提高网络服务的服务器端也是通过IP地址区分的，但几乎不可能以非常难记的IP地址形式交换服务器端地址信息。因此，将容易记、易表述得到**域名**分配并取代IP地址。
+
 
 #### DNS服务器
 
@@ -5476,9 +5489,11 @@ void ErrorHandling(char* message)
 
 图8-1展示了默认DNS服务器无法解析主机询问的域名IP地址时的应答过程。可以看出，默认DNS服务器收到自己无法解析的请求时，向上级DNS服务器询问。通过这种方式逐级向上传递信息，到达顶级DNS服务器——**根DNS服务器**时，它知道该向哪个DNS服务器询问。向下级DNS传递解析请求，得到IP地址后原路返回，最后将解析的IP地址传递到发起请求的主机。DNS就是这样层次化管理的一种**分布式数据库系统**。
 
+
 ### 8.2 IP地址和域名之间的转换
 
 8.1节讲解了域名和IP地址之间的转换过程，本节介绍通过程序向**DNS服务器发出解析请求**的方法。
+
 
 #### 程序中有必要使用域名吗？
 
@@ -5491,6 +5506,7 @@ IP `211.102.204.12`，PORT `2012`
 这时就需要用到**域名**。一旦注册域名后可能永久不变，因此利用域名编写程序会更好一些。这样，每次运行程序时**根据域名获得IP地址**，再接入服务器，这样程序就不会依赖于服务器IP地址了。
 
 所以说，程序中也需要**IP地址和域名之间的转换函数**。
+
 
 #### 利用域名获得IP地址、
 
@@ -5543,3 +5559,173 @@ struct hostent
 
 <img src="assets\QQ_1745761583209.png" width="60%" alt="图8-2">
 
+下面示例主要演示`gethostbyname`函数的应用，并说明`hostent`结构体变量的特性。
+
+**`gethostbyname.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int i;
+    struct hostent *host;
+
+    if(argc != 2)
+    {
+        printf("Usage: %s <addr> \n", argv[0]);
+        exit(1);
+    }
+
+    //将通过main函数传递的字符串用作参数调用gethostbyname
+    host = gethostbyname(argv[1]);
+    if(!host)
+        error_handling("gethost... error!");
+
+    //输出官方域名
+    printf("Official name: %s \n", host->h_name);
+    
+    //输出除官方域名以外的域名
+    for(i=0; host->h_aliases[i]; i++)
+        printf("Aliases %d: %s \n", i+1, host->h_aliases[i]);
+
+    //输出地址族
+    printf("Address type: %s \n", 
+        (host->h_addrtype == AF_INET ? "AF_INET" : "AF_INET6"));
+
+    //输出IP地址信息
+    for(i=0; host->h_addr_list[i]; i++)
+        printf("IP addr %d: %s \n", i+1, 
+            inet_ntoa(*(struct in_addr*)host->h_addr_list[i]));
+
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+运行结果：
+![](assets/image-hostname.png)
+
+**对输出IP地址信息的解释**
+``` c
+//输出IP地址信息
+for(i=0; host->h_addr_list[i]; i++)
+    printf("IP addr %d: %s \n", i+1, 
+        inet_ntoa(*(struct in_addr*)host->h_addr_list[i]));
+```
+该循环是一个标准的for循环，**用于便利`host->h_addr_list`数组**：
+1. `host->h_addr_list`是一个指向IP地址列表的**指针数组**，每一个元素都是一个网络字节序的IP地址
+2. 循环从`i=0`开始，每次递增1，直到遇到`NULL`指针（表示数组结束）
+3. 这个循环会处理主机**所有的IP地址**
+
+对 `inet_ntoa` 函数的解释
+``` c
+inet_ntoa(*(struct in_addr*)host->h_addr_list[i])
+```
+这部分代码完成了IP地址从**二进制**到**点分十进制字符串**的转换：
+1. `host->h_addr_list`：获取第i个IP地址（二进制形式）
+2. `(struct in_addr*)`：将通用的char指针强制转换为 **`struct in_addr`结构体指针**
+3. `*`：**解引用（通过指针访问它所指向的实际数据）**，获取实际的`strcut in_addr`结构体
+4. `inet_ntoa`：将**网络字节顺序**的IP地址结构体转换为**点分十进制字符串**（如“192.168.1.1”）
+
+注：`gethostbyname()`是一个比较旧的函数，现代编程更推荐使用`getaddrinfo()`，因为它支持IPv6和更好的错误处理。
+
+此处利用Naver网站运行上述示例。若只看`hostent`结构体的定义，结构体成员`h_addr_list`指向**字符串指针数组**（由多个字符串地址构成的数组）。但字符串指针数组中的元素实际指向的是 **`in_addr`结构体变量地址值**而非字符串，如图8-3所示。
+
+<img src="assets\image-8.3.png" width="60%" alt="图8-3">
+
+图8-3给出了`h_addr_list`结构体的参照关系。正因如此需要进行**类型转换（`struct in_addr*`）**，并调用`inet_ntoa`函数。
+
+---
+提示：为什么是 `char*` 而不是 `inet_addr`
+
+`hostent`结构体的成员 `h_addr_list` 指向的数组类型并不是`in_addr`结构体的指针数组，而是采用`char`指针。实际上，`hostent`结构体并非只为IPv4准备。`h_addr_list`指向的数组中也可以IPv6地址信息。因此，考虑到**通用性**，声明为 `char` 类型的数组。
+
+---
+
+
+#### 利用IP地址获取域名
+
+之前介绍的`gehostbyname`函数利用域名获取包括IP地址在内的域相关信息。而`gethostbyaddr`函数**利用IP地址获取域相关信息**。
+
+``` c
+#include <netdb.h>
+
+struct hostent * gethostbyaddr(const char * addr, socklen_t len, int family);
+//成功时返回hostent结构体变量地址值，失败时返回NULL指针
+```
+
+- `addr` 含有IP地址的`in_addr`结构体指针。为了同时传递IPv4之外的其他信息，该变量的类型声明为**char指针**。
+- `len` 向第一个参数传递的地址信息的字节数，IPv4时为4,IPv6时为6。
+- `family` 传递地址族信息，IPv4时为AF_INET，IPv6时为AF_INET6
+
+下面通过示例演示该函数的使用方法。
+
+**`gethostbyaddr.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int i;
+    struct hostent* host;
+    struct sockaddr_in addr;
+
+    if(argc != 2)
+    {
+        printf("Usage: %s <IP> \n", argv[0]);
+        exit(1);
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_addr.s_addr = inet_addr(argv[1]);  //将字符串转换成32位整数型
+    host = gethostbyaddr((char*)&addr.sin_addr, 4, AF_INET);
+    if(!host)
+        error_handling("gethost... error!");
+
+    //输出官方域名
+    printf("Official name: %s \n", host->h_name);
+
+    //输出官方域名以外的域名
+    for(i=0; host->h_aliases[i]; i++)
+        printf("Aliases %d: %s \n", i+1, host->h_aliases[i]);
+
+    //输出地址族
+    printf("Address type: %s \n", 
+        (host->h_addrtype == AF_INET) ? "AF_INET" : "AF_INET6");
+
+    //输出IP地址
+    for(i=0; host->h_addr_list[i]; i++)
+        printf("Ip addr %d: %s \n", i+1,
+            inet_ntoa(*(struct in_addr*)host->h_addr_list[i]));
+
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+运行结果：
+
+![]()
