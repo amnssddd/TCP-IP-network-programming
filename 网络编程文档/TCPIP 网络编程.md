@@ -6281,3 +6281,11 @@ getsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (void*)&opt_val, &opt_len);
 
 
 ### 9.4 基于Windows的实现
+
+由于大部分内容与Linux一致，为节省时间，故省略
+
+
+## 10 多进程服务器端
+
+
+### 10.1 进程的概念及运用
