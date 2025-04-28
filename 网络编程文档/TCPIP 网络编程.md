@@ -5728,4 +5728,10 @@ void error_handling(char* message)
 ```
 运行结果：
 
-![]()
+![](assets/image-hostaddr.png)
+
+注：由于 `74.125.19.106` 没有反向 DNS 记录，所以 `gethostbyaddr()` 会失败，因此使用 `8.8.8.8`。
+
+- `8.8.8.8` 是 Google 的公共 DNS 服务器，它配置了反向 DNS（PTR 记录）
+- 而 `74.125.19.106`（Google 的一个 IP）没有配置 PTR 记录,这意味着该IP没有反向 DNS 记录，所以 `gethostbyaddr()` 查询失败
+
