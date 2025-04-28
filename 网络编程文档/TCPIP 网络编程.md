@@ -4468,7 +4468,7 @@ while(1)
 
 
 
-##### **UDP客户端中的`from_adr`和`adr_sz`**参数
+##### UDP客户端中的`from_adr`和`adr_sz`参数
 
 ```c
 str_len = recvfrom(sock, message, BUF_SIZE, 0, (struct sockaddr*)&from_adr, &adr_sz);   //接收服务器端发来的数据
@@ -5743,7 +5743,7 @@ Windows平台中也有类似功能的同名函数，用法与Linux系统中一�
 ``` c
 #include <winsock2.h>
 
-struct hostent * hethostbyname(const char * hostname);
+struct hostent * gethostbyname(const char * hostname);
 struct hostent * gethostbyaddr(const char * addr, socklen_t len, int family);
 //成功时返回hostent结构体变量地址值，失败时返回NULL指针
 ```
@@ -5857,9 +5857,9 @@ void ErrorHandling(char* message)
 
 运行结果：
 
-![](assets\QQ_1745784027202.png)
+![](assets/QQ_1745784027202.png)
 
-![](assets\QQ_1745784763162.png)
+![](assets/QQ_1745784763162.png)
 
 基于Windows的讲解到此结束。
 
@@ -5875,9 +5875,9 @@ void ErrorHandling(char* message)
 
 我们之前写的程序都是**创建好套接字后**直接使用的，此时通过**默认的套接字特性**进行数据通信。之前的示例较为简单，无需特别操作套接字特性，但有时的确需要更改。表9-1列出了一部分套接字可选项。
 
-<img src="assets\QQ_1745795868249.png" width="60%" alt="图9-1">
+<img src="assets\QQ_1745795868249.png" width="60%" alt="表9-1">
 
-<img src="assets\QQ_1745795875377.png" width="60%" alt="图9-1">
+<img src="assets\QQ_1745795875377.png" width="60%" alt="表9-1">
 
 从表9-1可以看出，套接字可选项是**分层**的。
 - `IPPROTO_IP`层可选项 是**IP协议**相关事项。
@@ -5891,17 +5891,393 @@ void ErrorHandling(char* message)
 
 ``` c
 #include <sys/socket.h>
-
+//获取套接字选项
 int getsockopt(int sock, int level, int optname, void *optval, socklen_t *optlen);
 //成功时返回0，失败时返回-1
 ```
-
 - `sock` 用于查看选项套接字文件描述符
 - `level` 要查看的可选项的协议层
 - `optname` 要更改的可选项名
 - `optval` 保存要更改的选项信息的缓冲地址值
 - `opylen` 向第四个参数`optval`传递的可选项信息的字节数
 
-接下来介绍这些函数的调用方法。先介绍`getsockopt`函数的调用方法。下列示例用协议层为`SOL_SOCKET`、名为`SO_TYPE`的可选项查看套接字类型（TCP或UDP）
+上述函数用于**读取套接字可选项**，接下来介绍**更改可选项时**调用的函数。
+
+``` c
+#include <sys/socket.h>
+//设置套接字选项
+int setsockopt(int sock, int level, int optname, const void *optval, socklen_t optlen);
+//成功时返回0,失败时返回-1
+```
+- `sock` 用于更改可选项的套接字文件描述符
+- `level`要更改的可选项协议层
+- `optname` 要更改的可选项名
+- `optval` 保存要更改的选项信息的缓冲地址值
+- `optlen` 向第四个参数`optval`传递的可选项信息的字节数
+
+**为什么getsockopt最后一个参数需要&，而setsockopt最后一个参数不需要&**
+- `setsockopt` 只需要知道 `optval` 的大小（`optlen`），**不需要修改**它，所以直接传值。
+- `getsockopt` 需要返回实际写入的选项大小，因此必须通过指针**修改** `optlen`（类似 `recvfrom` 的 `addrlen` 参数）。
+
+接下来介绍这些函数调用方法。关于`setsockopt`函数的调用方法将在其他示例中给出，先介绍`getsockopt`函数的调用方法。下列示例用协议层为`SOL_SOCKET`、名为`SO_TYPE`的可选项查看套接字类型（TCP或UDP）
 
 **`sock_type.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int tcp_sock, udp_sock;
+    int sock_type;
+    socklen_t optlen;
+    int state;
+
+    optlen = sizeof(sock_type);
+    tcp_sock = socket(PF_INET, SOCK_STREAM, 0);
+    udp_sock = socket(PF_INET, SOCK_DGRAM, 0);
+    printf("SOCK_STREAM: %d \n", SOCK_STREAM);
+    printf("SOCK_DGRAM: %d \n", SOCK_DGRAM);
+
+    state = getsockopt(tcp_sock, SOL_SOCKET, SO_TYPE, (void*)&sock_type, &optlen);  //获取套结字类型
+    if(state)
+        error_handling("getsockopt() error!");
+    printf("Socket type one: %d \n", sock_type);
+
+    state = getsockopt(udp_sock, SOL_SOCKET, SO_TYPE, (void*)&sock_type, &optlen);  //获取套结字类型
+    if(state)
+        error_handling("getsockopt() error!");
+    printf("Socket type two: %d \n", sock_type);
+
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+运行结果：
+
+![](assets/image-socktype.png)
+
+从运行结果可以看出，`getsockopt`函数可获取套接字类型信息：
+- 如果是**TCP套接字**，将获得 `SOCK_STREAM` 常数值 1
+- 如果是**UDP套接字**，将获得 `SOCK_DGRAM` 常数值 1
+
+此外，用于验证套接字类型的 `SO_TYPE` 是**只读可选项**，因为**套接字类型只能在创建时决定**，以后不能再更改。
+
+
+#### SO_SNDBUF & SO_RCVBUF
+
+前面介绍过，创建套接字将同时生成**I/O缓冲**。
+
+`SO_RCVBUF` 是**输入缓冲大小**相关可选项，`SO_SNDBUF` 是**输出缓冲大小**相关可选项。用这两个可选项既可以**读取**当前I/O缓冲大小，也可以进行**更改**。通过下列示例读取创建套接字时默认的I/O缓冲大小。
+
+**`get_buf.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    int snd_buf, rcv_buf, state;
+    socklen_t len;
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    len = sizeof(snd_buf);
+    state = getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (void*)&snd_buf, &len);
+    if(state)
+        error_handling("getsockopt() error!");
+
+    len = sizeof(rcv_buf);
+    state = getsockopt(sock, SOL_SOCKET, SO_RCVBUF, (void*)&rcv_buf, &len);
+    if(state)
+        error_handling("getsockopt() error!");
+
+    printf("Input buffer size: %d \n", rcv_buf);
+    printf("Output buffer size: %d \n", snd_buf);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：
+
+![](assets/image-getbuf.png)
+
+上述代码为查看I/O缓冲大小，接下来的程序中将更改I/O缓冲大小。
+
+**`set_buf.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    int snd_buf = 1024*3, rcv_buf = 1024*3;
+    int state;
+    socklen_t len;
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    state = setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (void*)&rcv_buf, sizeof(rcv_buf)); //将I/O缓冲大小更改为3M字节
+    if(state)
+        error_handling("setsockopt() error!");
+    
+    state = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (void*)&snd_buf, sizeof(snd_buf)); //将I/O缓冲大小更改为3M字节
+    if(state)
+        error_handling("setsockopt() error!");
+
+    len = sizeof(snd_buf);
+    state = getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (void*)&snd_buf, &len); //为验证更改读取缓冲大小
+    if(state)
+        error_handling("getsockopt() error!");
+
+    len = sizeof(rcv_buf);
+    state = getsockopt(sock, SOL_SOCKET, SO_RCVBUF, (void*)&rcv_buf, &len); //为验证更改读取缓冲大小
+    if(state)
+        error_handling("getsockopt() error!");
+
+    printf("Input buffer size: %d \n", rcv_buf);
+    printf("Output buffer size: %d \n", snd_buf);
+
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+ 运行结果：
+
+![](assets/image-setbuf.png)
+
+我们本想把I/O缓冲改为**3072**字节，但由上图可知运行结果明显不同。缓冲大小的设置需谨慎处理，因此不会完全按照我们的要求进行，只是通过 `setsockopt` 函数向系统传递我们的要求。上述示例虽然没有100%按照我们的请求设置缓冲大小，但也大致反映出了通过 `setsockopt` 函数设置的缓冲大小。
+
+
+### 9.2 SO_REUSERADDR
+
+本节需理解可选项 `SO_REUSERADDR` 及其相关的 `Time-wait` 状态。
+
+
+#### 发生地址分配错误（Binding Error）
+
+学习`SO_REUSEADDR`可选项之前，应理解好`Time-wait`状态。读完下列示例后再讨论后续内容。
+
+**`reuseadr_eserver.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define TRUE 1
+#define FALSE 0
+void errror_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    char message[30];
+    int option, str_len;
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t optlen, clnt_adr_sz;
+
+    if(argc!=2)
+    {
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(serv_sock == -1)
+        errror_handling("socket() error!");
+
+    /* 首先将此处保持为注释状态
+    optlen = sizeof(option);
+    option = TRUE;
+    setsockopt(serv_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&option, optlen);
+    */
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+    
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    clnt_adr_sz = sizeof(clnt_adr);
+    clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+    while((str_len = read(clnt_sock, message, sizeof(message))) != 0)
+    {
+        write(clnt_sock, message, str_len);
+        write(1, message, str_len);
+    }
+    close(clnt_sock);
+    close(serv_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+（运行结果省略）
+
+此示例是之前已多次实现过的**回声服务器端**，可在控制台输入Q消息(客户端输入)，或通过CTRL+C终止程序。
+
+因而服务器端终止程序有两种情况。一是在客户端控制台输入 Q 消息时调用`close`函数，向服务器端发送FIN消息并经过四次握手过程。二是在服务器端输入 CTRL+C 向服务器传递FIN消息。强制终止程序时，由操作系统关闭文件及套接字，此过程相当于调用`close`函数，也会向服务器端传递FIN消息。
+
+通常情况下，一般都是客户端先请求断开连接，所以不会发送特别的事情，重新运行服务器端也不成问题。但如果在服务器和客户端已建立连接的状态下，向服务器端控制台输入 CTRL+C ，即**强制关闭服务器端**。这主要模拟**服务器端向客户端发送FIN消息**的情景。但如果以这种方式终止程序，那服务器端重新运行时将产生问题。如果用同一端口号重新运行服务器端，将输出"bind() error!"消息，并且无法再次运行。过一段时间即可正常运行。
+
+上述两种运行方式的唯一区别就是**谁先传输FIN消息**，但结果却迥然不同，原因何在呢？
+
+
+#### Time-wait 状态
+
+下面为TCP四次握手的过程，如同9-1所示。
+
+<img src="assets/image-9.1.png" width="40%" alt="图9-1">
+ 
+假设图9-1中主机A是服务器端，因为是主机A向B发送FIN消息，故可以想象成在服务器端控制台输入 CTRL+C。但问题是，套接字经过四次握手过程后并非立即消除，而是要经过一段时间的 `Time-wait` 时间。当然，只有**先断开连接（先发送FIN消息）**的主机才经过`Time-wait` 状态。因此，若服务器端先断开连接，则无法立即重新运行。套接字处在`Time-wait`状态时，**相应端口时正在使用的状态**。因此`bind`函数调用过程中会发生错误。
+
+---
+提示：客户端套接字不会经过`Time-wait`过程吗
+
+实际上，先断开连接的套接字必然会经过`Time-wait`过程，即无论服务器端还是客户端都会有该过程。但无需考虑客户端`Time-wait`状态，因为**客户端套接字的端口号是任意指定的**。与服务器端不同，客户端每次运行程序时都会**动态分配端口号**，因此无需过多关注`Time-wait`状态。
+
+---
+
+**为什么有`Time-wait状态`**
+
+图9-1中**假设**主机A向主机B传输ACK消息后**立即消除套接字**。但最后这条ACK消息在传递途中丢失，未能传递给主机B。这时主机B会认为之前自己发送的**FIN消息未能抵达**主机A，继而试图**重传**。但此时主机A已是**完全终止**的状态，因此主机B永远无法受到从主机A传来的**ACK消息**。相反，若主机A处在 `Time-wait` 状态，则会向主机B重传最后的ACK消息，主机B也可以正常终止。
+
+综上所述，**先传输FIN消息的主机应经过`Time-wait`过程**。
+
+
+#### 地址再分配
+
+`Time-wait`看似重要，但并不一定讨人喜欢。考虑一下系统发生故障从而紧急停止的情况。这时需尽快重启服务器端以提供服务，但因处于`Time-wait`状态而必须等待几分钟。因此，`Time-wait`并非只有优点，而且有些情况下可能引发更大问题。图9-2演示了四次握手时不得不延长`Time-wait`过程的情况。
+
+<img src="assets/image-9.2.png" width="40%" alt="图9-2">
+
+如图9-2所示，在主机A的四次握手过程中，如果最后的数据（ACK消息）丢失，则主机B会认为主机A未能收到自己发送的FIN消息，因而重传。这时，受到FIN消息的主机A将**重启`Time-wait`计时器**。因此，如果网络状态不理想，`Time-wait`状态将持续。
+
+解决方案就是**在套接字的可选项中更改 `SO_REUSEADDR` 的状态**。适当调整该参数，可**将`Time-wait`状态下的套接字端口号重新分配给新的套接字**。`SO_REUSEADDR` 的默认值为 0（假），这就意味着无法分配`Time-wait`状态下的套接字端口号。因此需要将这个值改为 1（真）。具体做法在示例`reuseadr_eserver.c`中给出，去掉代码注释即可。
+
+``` c
+optlen = sizeof(option);
+option = TRUE;
+setsockopt(serv_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&option, optlen);
+```
+
+**代码解释**
+
+1. `optlen = sizeof(option);`
+- 获取 option 变量的大小（sizeof(option)），通常是 int 类型（4 字节）。
+- setsockopt 需要知道传入的选项值的长度，因此这里先计算 option 的大小。
+
+2. `option = TRUE;`
+- TRUE 通常定义为 1。
+- 这里表示要启用 SO_REUSEADDR 选项。
+
+3. `setsockopt(serv_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&option, optlen);`
+- serv_sock：要设置的套接字（socket）描述符。
+- SOL_SOCKET：表示要设置的选项属于 套接字层级（Socket Level），而不是 TCP/IP 协议层级。
+- SO_REUSEADDR：具体要设置的选项，允许地址（IP + 端口）快速重用。
+- (void*)&option：指向选项值的指针（这里传递 option=1，表示启用）。
+- optlen：选项值的长度（sizeof(option)）。
+
+**`SO_REUSEADDR` 的作用**
+
+- 允许绑定处于 `Time_wait` 状态的地址：
+    - 当服务器主动关闭连接后，TCP 会进入 `Time_wait` 状态（通常 2 分钟），**此时端口仍然被占用**。
+    - 如果不设置 `SO_REUSEADDR`，服务器重启时会报 `bind() error` 错误。
+    - 设置 `SO_REUSEADDR 后`，即使端口处于 `Time_wait` 状态，也可以立即重新绑定。
+- 允许多个套接字绑定到相同端口（适用于多播/UDP）：
+    - 在某些情况下（如 UDP 多播），多个进程可以绑定到同一个端口。
+
+
+### 9.3 TCP_NODELAY
+
+#### Nagle 算法
+
+**为防止因数据包过多而发生网络过载**，Nagle算法诞生了。它应用于**TCP层**。其使用与否会导致如图9-3所示差异。
+
+<img src="assets/image-9.3.png" width="60%" alt="图9-3">
+
+注：图9-3是极端情况的展示，在程序中将字符串传给输出缓冲时**并不是逐字传递的**。
+
+图9-3展示了通过Nagle算法发送字符串“Nagle”和未使用Nagle算法的差别。可以得到如下结论：
+
+**只有受到前一数据的ACK消息时，Nagle算法才发送下一数据。**
+
+TCP套接字**默认使用**Nagle算法交换数据，因此最大限度地进行缓冲，直到收到ACK。图9-3左侧正式这种情况。为了发送字符串“Nagle”，将其传递到输出缓冲。这时头字符“N”之前没有其他数据（没有需接受的ACK），因此立即传输。之后开始等待字符“N”的ACK消息，等待过程中，将剩下的“agle”填入输出缓冲。接下来，收到字符“N”的ACK消息后，将输出缓冲的“agle”装入一个数据包发送。也就是说，共需传递**4**个数据包以传输一个字符串。
+
+接下来分析未使用Nagle算法的情况。假设字符“N”到“e”依序传到输出缓冲。此时**发送过程与ACK接收无关**，因此数据到达缓冲后将立即被发送出去。从图9-3右侧可知，发送字符串“Nagle”需要**10**个数据包。
+
+因此，为了**提高网络传输效率**，必须使用Nagle算法。
+
+但Nagle算法并不是什么时候都适用。根据传输数据的特性，网络流量未受太大影响时，不使用Nagle算法要比使用他们传输速度快。最典型的是“**传递大文件数据**”。将文件数据传入输出缓冲不会花太多时间，因此，即便不使用Nagle算法，也会在装满输出缓冲时传输数据包。**这不仅不会增加数据包的数量，反而会在无需等待ACK的前提下连续输出**，因此可大大提高传输速度。
+
+一般情况下，不使用Nagle算法可以提高传输速度。但如果无条件放弃使用Nagle算法，就会增加过多的网络流量，反而会影响传输。
+
+
+#### 禁用 Nagle 算法
+
+刚才说过的“大文件数据”应禁用Nagle算法。换言之若有必要，则应禁用Nagle算法。相关代码如下。
+
+``` c
+int opt_val = 1;
+setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (void*)&opt_val, sizeof(opt_val));
+```
+
+可以通过 `TCP_NODELAY` 的值查看Nagle算法的**设置状态**。
+
+``` c
+int opt_val;
+socklen_t opt_len;
+getsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (void*)&opt_val, &opt_len);
+```
+
+如果正在使用Nagle算法，`opt_val`变量会保存**0**；如果已禁用Nagle算法，则保存**1**；
+
+
+### 9.4 基于Windows的实现
