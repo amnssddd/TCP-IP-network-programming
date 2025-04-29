@@ -3,15 +3,19 @@
     {
       "name": "linux-gcc-x64",
       "includePath": [
-        "${workspaceFolder}/**"
+        "${workspaceFolder}/**",
+        "/usr/include",           // 显式添加系统头文件路径
+        "/usr/include/x86_64-linux-gnu"  // 可选：64位系统特定路径
       ],
       "compilerPath": "/usr/bin/gcc",
-      "cStandard": "${default}",
-      "cppStandard": "${default}",
+      "cStandard": "gnu11",       // 使用 GNU C11（支持 POSIX 扩展）
+      "cppStandard": "gnu++14",   // 根据需求调整
       "intelliSenseMode": "linux-gcc-x64",
       "compilerArgs": [
-        ""
-      ]
+        "-std=gnu11",            // 显式启用 GNU C11
+        "-D_GNU_SOURCE"          // 确保启用 GNU/POSIX 特性
+      ],
+      "configurationProvider": "ms-vscode.cmake-tools"  // 可选：如果使用 CMake
     }
   ],
   "version": 4
