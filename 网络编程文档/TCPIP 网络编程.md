@@ -6550,3 +6550,60 @@ int main(int argc, char* argv[])
 
 
 #### 销毁僵尸进程2：使用 waitpid 函数
+
+`wait`函数会引起**程序阻塞**，还可以考虑调用 `waitpid` 函数。这是防止僵尸进程的第二种方法，也是**防止阻塞**的方法。
+
+``` c
+#include <sys/wait.h>
+
+pid_t waitpid(pid_t pid, int * statloc, int options);
+//成功时返回终止的子进程ID（或0），失败时返回-1
+```
+
+- `pid` 等待终止的目标子进程的IP，若传递-1,则与`wait`函数相同，可以等待任意子进程终止。
+- `statloc` 与`wait`函数的`statloc`参数具有相同含义。
+- `options` 传递头文件`syswait.h`中声明的常量`WNOHANG`，即使没有终止的子进程也不会进入阻塞状态，而是**返回0并退出函数**。
+
+下面介绍调用上述函数的示例。调用`waitpid`函数时，程序不会阻塞，在该示例中应观察这点。
+
+**`waitpid.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main(int argc, char* argv[])
+{
+    int status;
+    pid_t pid = fork();
+
+    if(pid == 0)
+    {
+        sleep(15);  //推迟子进程的执行
+        return 24;
+    }
+    else
+    {
+        //while函数调用waitpid函数。向第三个参数传递 WNOHANG，因此若没有终止的子进程将返回0
+        while (!waitpid(pid, &status, WNOHANG))
+        {
+            sleep(3);
+            puts("sleep 3sec.");
+        }
+        
+        if(WIFEXITED(status))
+            printf("Child send %d \n", WEXITSTATUS(status));
+    }
+    return 0;
+}
+```
+运行结果：
+
+![](assets/image-filepid.png)
+
+可以看出 `puts("sleep 3sec.")` 被执行了5次，证明`waitpid`函数并为阻塞。
+
+
+
+### 10.3 信号处理
