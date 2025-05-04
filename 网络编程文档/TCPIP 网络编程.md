@@ -6477,7 +6477,9 @@ if(WIFEXITED(status))   //是正常终止吗?
 
 根据上述内容编写示例，此示例不会让子进程变成僵尸进程。
 
-**`wait.c`**
+(该示例名应是`wait.c`，创建文件时打错成了`file.c`，将错就错吧)
+
+**`file.c`**
 
 ``` c
 #include <stdio.h>
@@ -6562,7 +6564,7 @@ pid_t waitpid(pid_t pid, int * statloc, int options);
 
 - `pid` 等待终止的目标子进程的IP，若传递-1,则与`wait`函数相同，可以等待任意子进程终止。
 - `statloc` 与`wait`函数的`statloc`参数具有相同含义。
-- `options` 传递头文件`syswait.h`中声明的常量`WNOHANG`，即使没有终止的子进程也不会进入阻塞状态，而是**返回0并退出函数**。
+- `options` 传递头文件`sys/wait.h`中声明的常量`WNOHANG`，即使没有终止的子进程也不会进入阻塞状态，而是**返回0并退出函数**。
 
 下面介绍调用上述函数的示例。调用`waitpid`函数时，程序不会阻塞，在该示例中应观察这点。
 
@@ -6602,8 +6604,309 @@ int main(int argc, char* argv[])
 
 ![](assets/image-filepid.png)
 
-可以看出 `puts("sleep 3sec.")` 被执行了5次，证明`waitpid`函数并为阻塞。
+可以看出 `puts("sleep 3sec.")` 被执行了5次，证明`waitpid`函数并未阻塞。
 
 
 
 ### 10.3 信号处理
+
+我们此时已经知道了进程创建及销毁方法，但还有一个问题没有解决：
+
+“子进程究竟何时终止？调用`waitpid`函数后要无休止等待吗？”
+
+父进程往往与子进程一样繁忙，因此不能只调用`waitpid`函数以等待子进程终止。接下来讨论解决方法。
+
+
+#### 向操作系统求助
+
+子进程终止的识别主体是**操作系统**。当操作系统提示父进程其创建的子进程终止后，父进程将暂时放下工作，处理子进程终止相关事宜。
+
+为实现该想法，我们引入**信号处理**（Signal Handling）机制。此处的“信号”是**在特定事件发生时由操作系统向进程发送的信息**。另外为了响应该消息，**执行与消息相关的自定义操作的过程**称为“处理”或“信号处理”。关于这两点将在后面说明。
+
+
+#### 信号与 singal 函数
+
+下列进程和操作系统间的对话是帮助理解信号处理而写的，其中包含所有信号处理相关内容。
+- 进程：“嘿，操作系统！如果我之前创建的子进程终止，就帮我调用`zombie_handler`函数。”
+- 操作系统：“好的！如果你的子进程终止，我会帮你调用`zombie_handler`函数，你先把该函数要执行的语句编好！”
+
+上述对话中进程所讲的相当于“**注册信号**”过程，即**发现自己的子进程结束时，请求操作系统调用特定函数**。该请求通过如下函数调用完成（因此称该函数为**信号注册函数**）
+
+``` c
+#include <signal.h>
+
+void(*signal(int signo, void (func*)(int)))(int);
+//为了在产生信号时调用，返回之前注册的函数指针
+```
+
+上述函数的返回值类型为**函数指针**。为方便理解，将上述函数声明整理如下：
+- **函数名**：`signal`
+- **参数**：`int singo, void(*func)(int)`
+- **返回类型**：参数为 `int` 型，返回 `void` 型函数指针
+
+这个声明比较复杂，可以逐步拆解：
+- `signal`是一个函数，它接受两个参数：
+    - `int signo`：信号编号（如`SIGINT`、`SIGSEGV`等）
+    - `void (*func)(int)`：一个函数指针，指向一个接受`int`参数且无返回值的**函数**（即信号处理函数）
+- `signal`函数**返回一个函数指针**：
+    - 返回类型是`void (*)(int)`，即一个指向接受`int`参数且无返回值的函数的**指针**。
+    - 返回的是之前的**信号处理函数**。
+
+功能说明：
+- 当进程接收到信号`signo`时，**会调用`func`指向的函数**。
+- 成功时返回之前的信号处理函数，失败时返回`SIG_ERR`。
+看起来很抽象，具体如何使用将在实例中解释。
+
+调用上述函数时，第一个参数为**特殊情况信息**，第二个参数为**特殊情况下将要调用的地址值（指针）**。发生第一个参数代表的情况时，调用第二个参数所指的函数。下面给出第二个参数所指的函数，下面给出可以在`siganl`函数中注册的部分特殊情况和对应的常数。
+- `SIGALRM`：已到通过调用`alarm`函数注册的时间。
+- `SIGINT`：输入 `CTRL+C`。
+- `SIGCHLD`：子进程终止。
+
+接下来编写调用`sigbal`函数的语句完成如下请求：
+
+“子进程终止则调用`mychild`函数。”
+
+此时`mychild`函数的参数应为`int`，返回值类型应为`void`。只有这样才能成为`signal`函数的**第二个参数**。也就是说，`singal`函数的调用语句如下：
+```c
+singal(SIGCHLD, mychild);
+```
+
+接下来编写`signal`函数的调用语句，分别完成如下两个请求：
+<p style="line-height: 0.5;">“已到通过alarm函数注册的时间，请调用timeout函数”</p>
+<p style="line-height: 0.5; margin-top: 0;">“输入CTRL+C时调用keycontrol函数”</p>
+
+代表这两种情况的常数分别为`SIGALRM`和`SIGINT`，因此按如下方式调用`signal`函数。
+``` c
+singal(SIGALRM, timeout);
+signal(SIGINT， timeout);
+```
+
+以上就是**信号注册**过程。注册好信号，发生注册信号时（注册的情况发生时），操作系统将调用**该信号对应的函数**。下面通过示例验证，先介绍`alarm`函数。
+
+``` c
+#include <unistd.h>
+
+unsigned int alarm(unsigned int seconds);
+//返回0或以秒为单位的距 SIGALRM 信号发生所剩时间
+```
+
+如果调用该函数的同时向它传递一个**正整型参数**，相应时间后（以**秒**为单位）将产生 `SIGALRM` 信号。若向该函数传递**0**，则之前对`SIGALRM`信号的预约将取消。如果通过该函数预约信号后**未指定该信号对应的处理函数**，则（通过调用`singal`函数）**终止进程**，不做任何处理。
+
+接下来给出信号处理相关示例，希望可通过此示例掌握之前的内容。
+
+**`signal.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+
+//定义信号处理函数，这类函数称为信号处理器（Handler）
+void timeout(int sig)
+{
+    if(sig == SIGALRM)
+        puts("alarm out!");
+    alarm(2);   //为了每隔2s重复产生SIGALRM信号，在信号处理器调用alarm函数
+}
+
+//同上
+void keycontrol(int sig)
+{
+    if(sig == SIGINT)
+        puts("CTRL+C pressed");
+}
+
+int main()
+{
+    int i;
+    //注册SIGALRM、SIGINT信号及相应处理器
+    signal(SIGALRM, timeout);
+    signal(SIGINT, keycontrol);
+
+    alarm(2);  //预约2s后发生SIGALRM信号
+
+    for(i=0; i<3; i++)
+    {
+        puts("wait...");
+        //为查看信号产生和信号处理器的执行并提供每次100s、共3次的等待时间（实际执行时运行时间没有10s）
+        sleep(100); //实际上2s后被SIGALRM信号打断进入timeout函数，输出 “alarm out” 并进入下一次循环
+    }
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-signal.png)
+
+上述是没有任何输入时的运行结果。若在运行过程中输入CTRL+C，可以看到输出"CTRL+C pressed"字符串（此处省略运行结果）。有一点必须说明：
+
+“发生信号时将唤醒由于调用sleep函数而进入阻塞状态的进程”
+
+调用函数的主题的确是操作系统，但**进程处于睡眠状态无法调用函数**。因此，产生信号时，为了调用信号处理器，**将唤醒由于调用`sleep`函数而进入阻塞状态的进程**。而且，进程一旦被唤醒，就不会再进入睡眠状态。即使还未到调用`sleep`函数中规定的时间也是如此。所以上述示例运行不到10s就会结束，连续输入CTRL+C则有可能1s都不到。
+
+
+**`alarm(2)` 的作用**
+1. 第一次在 `main()` 函数中：
+ - 这是首次设置一个 2 秒的定时器，2 秒后内核会向进程发送 `SIGALRM` 信号。
+ - 由于 `signal(SIGALRM, timeout)` 已注册`timeout`作为`SIGALRM`的处理函数，所以当信号到达时，`timeout`会被调用。
+2. 第二次是在 `timeout()` 函数中：
+ - 当 `SIGALRM` 触发并进入 `timeout` 函数时，再次调用 `alarm(2)`，这样 2 秒后会再次触发 `SIGALRM`。
+ - 这样做的目的是让 `SIGALRM` 每隔 2 秒重复触发一次，形成周期性定时器。
+
+**为什么需要两次 `alarm(2)`**
+- `alarm(2)` 只会触发一次，如果不重新设置，`SIGALRM` 只会发生一次。
+- 在 `timeout` 里再次调用 alarm(2)，相当于**重置定时器**，让它每隔 2 秒触发一次，从而实现**周期性的定时提醒**。
+
+**执行流程**
+- `main()` 调用 `alarm(2)` → 2 秒后 `SIGALRM` 触发 → 进入 `timeout`。
+- `timeout` 打印 "alarm out!" 并再次调用 `alarm(2)` → 2 秒后再次触发 `SIGALRM` → 循环执行。
+- 如果用户按下 CTRL+C，会触发 `SIGINT`，调用 `keycontrol` 打印 "CTRL+C pressed"。
+
+
+#### 利用 sigaction 函数进行信号处理
+
+前面所学的知识足以用来编写防止僵尸进程的代码，但此处还可以介绍`sigaction`函数，它类似于`signal`函数，而且可以完全替代后者，也更稳定。之所以稳定，是因为如下原因：
+
+“signal函数在UNIX系列的不同操作系统汇中可能存在区别，但sigaction函数完全相同。”
+
+实际上如今`sigaction`函数用的更多，在此为减轻负担仅讲解可替换`signal`函数的功能。
+
+``` c
+#include <signal.h>
+
+int sigaction(int signo, const struct sigaction * act, struct sigaction * oldact);
+//成功时返回0,失败时返回-1
+```
+- `signo` 与`signal`函数相同，**传递信号**信息。
+- `act` 对应第一个参数的**信号处理函数**（信号处理器）信息。
+- `oldact` 通过此参数获取之前注册的**信号处理函数指针**，若不需要则传递0。
+
+声明并初始化 `sigaction` 结构体变量以调用上述函数，该结构体定义如下。
+``` c
+struct sigaction
+{
+    void(*sa_handler)(int);
+    sigset_t sa_mask;
+    int sa_flags;
+}
+```
+
+此结构体的`sa_handler`成员保存**信号处理函数的指针值（地址值）**。`sa_mask`和`sa_flags`的所有位均初始化为0即可。这两个成员用于**指定信号相关的选项和特性**，而我们的目的主要是防止产生僵尸进程，故在此省略，详细解释在后面章节给出。
+
+下面给出示例，其中还包括了尚未讲解的使用sigaction函数所需的全部内容。
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+
+void timeout(int sig)
+{
+    if(sig == SIGALRM)
+        puts("Time out!");
+    alarm(2);
+}
+
+int main()
+{
+    int i;
+    struct sigaction act;        //声明sigaction结构体变量
+    act.sa_handler = timeout;    //在sa_handler成员中保存函数指针值
+    sigemptyset(&act.sa_mask);   //调用sigemptyset函数将sa_mask成员的所有位初始化为0
+    act.sa_flags = 0;            //sa_flags成员同样初始化为0
+    sigaction(SIGALRM, &act, 0); //注册SIGALRM信号的处理器
+
+    alarm(2);  //调用alarm函数预约2s后发送SIGALRM信号
+
+    for(i=0; i<3; i++)
+    {
+        puts("wait...");
+        sleep(100);
+    }
+    return 0;
+}
+```
+运行结果同上，在此省略。这就是信号处理相关理论，以此为基础讨论**消灭僵尸进程**的方法。
+
+
+#### 利用信号处理技术消灭僵尸进程
+
+子进程终止时会产生 **`SIGCHLD`** 信号，这点为编写程序的关键。接下来利用`sigaction`函数编写示例。
+
+**`remove_zombie.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
+
+void read_childproc(int sig)
+{
+    int status;
+    pid_t id = waitpid(-1, &status, WNOHANG); //-1表示可等待任意子进程终止
+    if(WIFEXITED(status))
+    {
+        printf("Remove proc id: %d \n", id);   //子进程id
+        printf("Child send: %d \n", WEXITSTATUS(status));  //子进程返回值
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    pid_t pid;
+    struct sigaction act;
+    act.sa_handler = read_childproc;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    sigaction(SIGCHLD, &act, 0);
+
+    pid = fork(); //子进程返回0,父进程返回子进程id
+
+    if(pid == 0)  //子进程执行区域
+    {
+        puts("Hi! I'm child process");
+        sleep(10);
+        return 12;
+    }
+    else          //父进程执行区域
+    {
+        printf("Child proc id: %d \n", pid);  //输出子进程id
+        pid = fork();
+        if(pid == 0)  //另一子进程执行区域
+        {
+            puts("Hi! I'm child process");
+            sleep(10);
+            exit(24);
+        }
+        else
+        {
+            int i;
+            printf("Child proc id: %d \n", pid);
+            for(i=0;i<5;i++)
+            {
+                puts("wait...");
+                sleep(5); //用于等待发生SIGCHLD信号，发生信号时，父进程将被唤醒
+            }
+        }
+    }
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-remove_zombie.png)
+
+可以看出，子进程并未变成僵尸进程。接下来利用进程相关知识编写服务器端。
+
+
+### 10.4 基于多任务的并发服务器
+
+我们已做好了利用`fork`函数编写并法服务器端准备，现在可以编写并发服务器端了。
+
+
+#### 基于进程的并发服务器模型
+
