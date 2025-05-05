@@ -5461,7 +5461,7 @@ void ErrorHandling(char* message)
 
 #### DNS服务器
 
-在浏览器地址栏输入Naver网站的IP地址`222.122.195.5`即可即可游览Naver网站主页。但我们通常输入Naver网站的域名`www.naver.com`访问网站。二者究竟有何区别？
+在浏览器地址栏输入Naver网站的**IP地址**`222.122.195.5`即可即可游览Naver网站主页。但我们通常输入Naver网站的**域名**`www.naver.com`访问网站。二者究竟有何区别？
 
 从进入Naver网站主页这一结果上看，没有区别，但**接入过程不同**。**域名**是赋予服务器端的**虚拟地址**，而非实际地址。因此需要将虚拟地址转化为实际地址。可以向**DNS服务器**请求转换地址。
 
@@ -5515,7 +5515,7 @@ IP `211.102.204.12`，PORT `2012`
 ``` c
 #include <netdb.h>
 
-struct hostent * hethostbyname(const char * hostname);
+struct hostent * gethostbyname(const char * hostname);
 //成功时返回hostent结构体地址，失败时返回NULL指针
 ```
 这个函数使用方便。只要传递**域名字符串**，就会返回域名对应的**IP地址**。只是返回时地址信息会装入 `hostent` 结构体。此结构体定义如下。
