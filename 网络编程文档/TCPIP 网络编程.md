@@ -6832,7 +6832,7 @@ int main()
 
 #### 利用信号处理技术消灭僵尸进程
 
-子进程终止时会产生 **`SIGCHLD`** 信号，这点为编写程序的关键。接下来利用`sigaction`函数编写示例。
+**子进程终止时会产生 `SIGCHLD` 信号**，这点为编写程序的关键。接下来利用`sigaction`函数编写示例。
 
 **`remove_zombie.c`**
 
@@ -6909,4 +6909,164 @@ int main(int argc, char* argv[])
 
 
 #### 基于进程的并发服务器模型
+
+之前的回声服务器端每次只能向一个客户端提供服务。因此我们将扩展回声服务器端，使其可以同时向多个客户端提供服务。图10-2给出了基于多进程的并发回声服务器端的实现模型。
+
+<img src="assets/image-10.2.png" width="60%" alt="10-2">
+
+从图10-2可以看出，每当有客户端请求（连接请求）时，回声服务器端都**创建子进程以提供服务**。请求服务的客户端若有5个，则将创建5个子进程提供服务。为了完成这些任务，需要经过如下过程，这是与之前的回声服务器端的区别所在。
+- 第一阶段：回声服务器端（父进程）通过调用`accept`函数**受理连接请求**。
+- 第二阶段：此时获取的套接字文件描述符并**传递给子进程**。
+- 第三阶段：子进程利用传递的文件描述符**提供服务**。
+
+由于**子进程会复制父进程拥有的所有资源**，实际上根本不用另外经过传递文件描述符的过程。
+
+
+#### 实现并发服务器
+
+下面给出**并发回声服务器端**的实现代码。当然程序是基于**多进程**实现的，可结合第4章的回声客户端运行。
+
+**`echo_mpserv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 30
+void error_handling(char* message);
+void read_childproc(int sig);
+
+int main(int argc, char*argv[])
+{
+    int serv_sock, clnt_sock;
+    struct sockaddr_in serv_adr, clnt_adr;
+
+    pid_t pid;
+    struct sigaction act;
+    socklen_t adr_sz;
+    int str_len ,state;
+    char buf[BUF_SIZE];
+
+    if(argc!=2)
+    {
+        printf("Usage : %s <port> \n",argv[0]);
+    }
+
+    act.sa_handler = read_childproc;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    state = sigaction(SIGCHLD, &act, 0);
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+
+    if(listen(serv_sock, 5))
+        error_handling("listen() error!");
+
+    while(1)
+    {
+        adr_sz = sizeof(clnt_adr);
+        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &adr_sz);
+        if(clnt_sock == -1)
+            continue;
+        else
+            puts("new client connected...");
+
+        pid = fork();
+        if(pid == -1)
+        {
+            close(clnt_sock);
+            continue;
+        }
+        if(pid == 0)  //子进程运行区域，此部分负责向回声客户端提供回声服务
+        {
+            close(serv_sock); //子进程只处理已接受的客户端连接，不需要监听新的连接，所以关闭服务器套接字
+            while((str_len = read(clnt_sock, buf, BUF_SIZE)) != 0)
+                write(clnt_sock, buf, str_len);
+
+            close(clnt_sock); //子进程处理完客户端请求后关闭与客户端连接的套接字，因为子进程继承了父进程的所有文件描述符
+            puts("client disconnected...");
+            return 0;
+        }
+        else    
+            close(clnt_sock); //父进程不需要直接处理客户端连接（由子进程处理），所以关闭客户端套接字以避免文件描述符泄漏
+    }
+    close(serv_sock);
+    return 0;
+}
+
+void read_childproc(int sig)
+{
+    pid_t pid;
+    int status;
+    pid = waitpid(-1, &status, WNOHANG);
+    printf("reomve proc id: %d \n", pid);
+}
+
+void error_handling(char *message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：`echo_mpserver.c`
+
+![](assets/image-mpserv.png)
+
+运行结果：`echo_client.c one`
+
+![](assets/image-mp_client1.png)
+
+运行结果：`echo_client.c two`
+
+![](assets/image-mp_client2.png)
+
+启动服务器端后，要创建多个客户端并建立连接，以验证服务器端同时向大多数客户端提供服务。
+
+
+#### 通过 fork 函数复制文件描述符
+
+示例`echo_mpserv.c`中给出了**通过`fork`函数复制文件描述符**的过程。父进程将2个套接字（一个是服务器套接字，另一个是与客户端连接的套接字）文件描述符复制给子进程。
+
+调用`fork`函数时会复制父进程的所有资源，但这并不意味着复制了套接字。严格意义上来讲，套接字属于操作系统————只是进程拥有代表相应套接字的文件描述符。
+
+示例`echo_mpserv.c`中的`fork`函数调用过程如图10-3所示。调用fork函数后，2个文件描述符指向同一套接字。
+
+<img src="assets/image-10.3.png" width="60%" alt="10-3">
+
+如图10-3所示，1个套接字中存在2个文件描述符时，只有2个文件描述符都终止（销毁）后，才能销毁套接字。如果维持图中的连接状态，即使子进程销毁了与客户端连接的套接字文件描述符，也无法完全销毁套接字（服务器端套接字同样如此）。因此，调用`fork`函数后，**要将无关的套接字文件描述符关掉**，如图10-4所示。
+
+<img src="assets/image-10.4.png" width="60%" alt="10-4">
+
+为了将文件描述符整理成10-4的形式，示例`echo_mpserv.c`中调用`close`函数如下所示：
+``` c
+if(pid == 0)  //子进程运行区域，此部分负责向回声客户端提供回声服务
+{
+    close(serv_sock); //子进程只处理已接受的客户端连接，不需要监听新的连接，所以关闭服务器套接字
+    while((str_len = read(clnt_sock, buf, BUF_SIZE)) != 0)
+        write(clnt_sock, buf, str_len);
+
+    close(clnt_sock); //子进程处理完客户端请求后关闭与客户端连接的套接字，因为子进程继承了父进程的所有文件描述符
+    puts("client disconnected...");
+    return 0;
+}
+else    
+    close(clnt_sock); //父进程不需要直接处理客户端连接（由子进程处理），所以关闭客户端套接字以避免文件描述符泄漏
+```
+
+
+### 10.5 分割 TCP 的 I/O 程序
 
