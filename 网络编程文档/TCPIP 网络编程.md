@@ -7384,3 +7384,185 @@ void error_handling(char* message)
 ![](assets/image-ex_serv.png)
 
 ![](assets/image-ex_client.png)
+
+
+## 11 进程间通信
+
+### 11.1 进程间通信的基本概念
+
+进程间通信（Inter Process Communication）意味着**两个不同进程间可以交换数据**，为了完成这一点操作系统中应提供两个进程可以同时访问的内存空间。
+
+#### 对进程间通信的基本理解
+
+理解号进程间通信并没有想象中那么难，进程A和B之间的如下谈话内容就是一种进程间通信规则。
+
+“如果我有1个面包，变量bread的值就为。如果吃掉这个面包，bread的值又变回0。因此你可通过变量bread值判断我的状态”。
+
+也就是说，进程A通过变量bread将自己的状态通知给了进程B，进程B通过变量bread听到了进程A的话。因此，只要有**两个进程可以同时访问的内存空间**，就可以通过此空间交换数据。但由于**进程具有完全独立的内存结构**，因此进程间通信只能通过其他特殊方式完成。
+
+
+#### 通过管道实现进程间通信
+
+图11-1表示基于**管道**（PIPE）的进程间通信结构模型。
+
+<img src="assets/image-11.1.png" width="60%" alt="11-1">
+
+从图11-1中可以看到，为了完成进程间通信，需要**创建管道**。管道并非属于进程的资源，而是和套接字一样，属于操作系统（也就不是`fork`函数的复制对象）。所以，两个进程通过**操作系统提供的内存空间**进行通信。下面介绍创建管道的函数。
+
+``` c
+#include <unistd.h>
+
+int pipe(int filedes[2]);
+//成功时返回0,失败时返回-1
+```
+- `filedes[0]` 通过管道**接收数据**时使用的文件描述符，即**管道出口**。
+- `filedes[1]` 通过管道**传输数据**时使用的文件描述符，即**管道入口**。
+
+以长度为2的int数组作为参数调用上述函数时，数组中存有两个文件描述符，它们将被用作管道的出口和入口。**父进程**调用该函数时将**创建管道**，同时**获取对应于出入口的文件描述符**，此时父进程可以读写同一管道。但父进程的目的时与子进程进行数据交换，因此需要用`fork`函数将入口或出口中的1个文件描述符传递给子进程。通过下列示例进行演示。
+
+**`pipe1.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#define BUF_SIZE 30
+
+int main(int argc, char* argv[])
+{
+    int fds[2];
+    char str[] = "Who are you?";
+    char buf[BUF_SIZE];
+    pid_t pid;
+
+    //调用pipe函数创建管道，fds数组中保存用于I/O的文件描述符
+    pipe(fds);
+
+    //调用fork函数复制用于管道I/O的文件描述符（并非管道），此时父子进程同时拥有I/O文件描述符
+    pid = fork();
+    if(pid == 0)
+    {
+        write(fds[1], str, sizeof(str));  //子进程向管道传递字符串
+    }
+    else
+    {
+        read(fds[0], buf, BUF_SIZE);      //父进程从管道接收字符串
+        puts(buf);
+    }
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-pipe1.png)
+
+上述示例中的通信方法及路径如图11-2所示。可看出父子进程都可以访问管道的I/O路径，但**子进程仅用于输入路径，父进程仅用于输出路径**。
+
+<img src="assets/image-11.2.png" width="60%" alt="11-2">
+
+以上就是管道的基本原理及通信方法。应用管道时还有一部分需要注意，通过双向通信示例进一步说明。
+
+
+#### 通过管道进行进程间双向通信
+
+下面创建2个进程通过1个管道进行**双向数据交换**的示例，其通信方式如图11-3所示。
+
+<img src="assets/image-11.3.png" width="60%" alt="11-3">
+
+从图11-3可看出，通过1个管道可以进行**双向通信**。但采用这种模型需格外注意。先给出示例，稍后再讨论。
+
+**`pipe2.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#define BUF_SIZE 30
+
+int main(int arc, char* argv[])
+{
+    int fds[2];
+    char str1[] = "Who are you?";
+    char str2[] = "Thank you for your message!";
+    char buf[BUF_SIZE];
+    pid_t pid;
+
+    pipe(fds);
+    pid = fork();
+    if(pid == 0)
+    {
+        write(fds[1], str1, sizeof(str1));  //向父进程传输数据
+        sleep(2);  //不能省略，否则会运行错误，具体原因后面会说
+        read(fds[0], buf, BUF_SIZE);        //接收父进程传输的数据
+        printf("Child proc output: %s \n", buf);
+    }  
+    else
+    {
+        read(fds[0], buf, BUF_SIZE);        //接收子进程传输的数据
+        printf("Parents proc output: %s \n", buf);
+        write(fds[1], str2, sizeof(str2));  //向子进程传输数据
+        sleep(3);
+    }
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-pipe2.png)
+
+运行结果与大致所想的一致。但若注释掉子进程中的 `sleep(2)`，便会引发运行错误。产生的原因是什么呢？
+
+“向管道传递数据时，先读的进程会把数据取走”
+
+简言之，数据进入管道后成为**无主数据**。也就通过`read`函数先读取数据的进程将得到数据，即使该进程将数据传到了管道。因此若注释掉子进程的`sleep(2)`，则**子进程将读回自己之前向管道发送的数据**。结果就是父进程无限期等待数据进入管道。
+
+从上述示例中可以看到，只用1个管道进行双向通信并非易事。为了实现这一点，程序需要预测并控制运行流程，这在每种系统中都不同，因而被视为不可能。为解决此问题，最直接的方法是**创建2个管道，各自负责不同的数据流**。其过程如图11-4所示。
+
+<img src="assets/image-11.4.png" width="60%" alt="11-4">
+
+由图11-4可知，使用2个管道可以避免程序流程的预测或控制。下面采用上述模型改进`pipe2.c`
+
+**`pipe3.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#define BUF_SIZE 30
+
+int main(int argc, char* argv[])
+{
+    int fds1[2], fds2[2];
+    char str1[] = "Who are you?";
+    char str2[] = "Thank";
+    char buf[BUF_SIZE];
+    pid_t pid;
+
+    pipe(fds1), pipe(fds2); //创建2个管道
+    pid = fork();
+    if(pid == 0)  //子进程通过数组fds1指向的管道向父进程传输数据
+    {
+        write(fds1[1], str1, sizeof(str1));
+        read(fds2[0],  buf, BUF_SIZE);
+        printf("Child proc output: %s \n", buf);
+    }
+    else          //父进程通过数组fds2指向的管道向子进程发送数据
+    {
+        read(fds1[0], buf, BUF_SIZE);
+        printf("Parents proc output: %s \n", buf);
+        write(fds2[1], str2, sizeof(str2));
+        sleep(3);  //并未有太大意义，仅是为了延迟父进程终止
+    }
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-pipe3.png)
+
+
+### 11.2 运用进程间通信
+
+上一节学习了基于管道的进程间通信方法，接下来将其运用到网络代码中。如前所述，进程间通信与创建服务并没有直接关联，但其有助于理解操作系统。
+
+#### 保存消息的回声服务器端
