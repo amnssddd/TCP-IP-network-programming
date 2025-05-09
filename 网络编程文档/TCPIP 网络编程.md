@@ -8233,3 +8233,52 @@ for(i=0; i<fd_max+1; i++)
 3. **客户端B连接**，`accept` 返回 `clnt_sock` = 5，此时 5 > 4，更新 `fd_max` = 5。
 4. **客户端A断开连接**，但 `fd_max` 仍为 5（因为可能有其他活跃连接）。
 5. 如果所有客户端断开，fd_max 会回退到 serv_sock（但代码中未显式处理，通常不影响）。
+
+<br>
+
+**reads 和 cpy_reads**
+
+在基于 `select` 的 I/O 多路复用服务器中，同时使用 `reads` 和 `cpy_reads` 两个 `fd_set` 变量是至关重要的设计。
+
+**（1）`select` 会破坏传入的 `fd_set`**
+   - 当 `select` 返回时，它会 修改传入的 `fd_set`，**仅保留真正有事件发生的 `fd`**，其余全部清零。
+    - 调用前：`cpy_reads = {serv_sock, clnt_sock1, clnt_sock2}`
+    - 如果只有 `clnt_sock1` 有数据，`select` 返回后：`cpy_reads = {clnt_sock1}`
+   - 问题：如果直接传 `reads` 给 `select`，**原始监视集合会被破坏，导致后续无法正确监视所有 `fd`**。
+
+**（2）reads 是完整监视集合**
+   - `reads` 需要长期维护所有需要监视的 `fd`（包括 `serv_sock` 和所有活跃的 `clnt_sock`）。
+   - 如果直接传 `reads` 给 `select`，每次调用后 `reads` 会被修改为仅包含就绪的 `fd`，导致后续无法检测新事件。
+
+``` c
+while (1) {
+    cpy_reads = reads;  // 复制到临时变量
+    select(fd_max+1, &cpy_reads, ...); // 传入 cpy_reads
+    // ... 处理就绪的 fd
+}
+```
+每次调用 `select` 前，将完整的监视集合 `reads` 复制到 `cpy_reads`，避免 `reads` 被破坏。
+
+``` c
+if (i == serv_sock) {
+    clnt_sock = accept(...);
+    FD_SET(clnt_sock, &reads); // 添加到主集合 reads
+    if (fd_max < clnt_sock) fd_max = clnt_sock;
+}
+```
+**新客户端连接后**，`reads` 会被更新（新增 `clnt_sock`），但 `cpy_reads` 不受影响。
+
+``` c
+else {
+    str_len = read(i, buf, BUF_SIZE);
+    if (str_len == 0) {
+        FD_CLR(i, &reads); // 从主集合移除
+        close(i);
+    }
+}
+```
+**客户端断开时**，从 `reads` 中移除，但 `cpy_reads` 是临时变量，无需处理。
+
+若不使用`cpy_reads`，则在第一次调用`select`函数后，如果无事件，`select`返回后 **`reads` 变为 {}**（被清空）。
+
+此时`reads` 已经是空集合，即使有新连接或数据到达，`select` 也无法检测到！
