@@ -1,21 +1,19 @@
 {
   "configurations": [
     {
-      "name": "linux-gcc-x64",
+      "name": "windows-gcc-x86",
       "includePath": [
-        "${workspaceFolder}/**",
-        "/usr/include",           // 显式添加系统头文件路径
-        "/usr/include/x86_64-linux-gnu"  // 可选：64位系统特定路径
+        "${workspaceFolder}/**"
       ],
-      "compilerPath": "/usr/bin/gcc",
-      "cStandard": "gnu11",       // 使用 GNU C11（支持 POSIX 扩展）
-      "cppStandard": "gnu++14",   // 根据需求调整
-      "intelliSenseMode": "linux-gcc-x64",
+      "compilerPath": "E:/resourceLibrary/MinGw/bin/gcc.exe",
+      "cStandard": "${default}",
+      "cppStandard": "${default}",
+      "intelliSenseMode": "windows-gcc-x86",
       "compilerArgs": [
-        "-std=gnu11",            // 显式启用 GNU C11
-        "-D_GNU_SOURCE"          // 确保启用 GNU/POSIX 特性
+        "-std=gnu11",
+        "-D_GNU_SOURCE"
       ],
-      "configurationProvider": "ms-vscode.cmake-tools"  // 可选：如果使用 CMake
+      "configurationProvider": "ms-vscode.cmake-tools"
     }
   ],
   "version": 4
