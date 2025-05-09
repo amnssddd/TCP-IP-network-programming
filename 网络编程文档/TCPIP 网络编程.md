@@ -8012,3 +8012,224 @@ else
 
 
 #### 实现 I/O 复用服务器端
+
+下面通过`select`函数实现I/O复用服务器端。下面示例是基于I/O复用的回声服务器端。
+
+**`echp_selectserv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/select.h>
+#define BUF_SIZE 100
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    struct sockaddr_in serv_adr, clnt_adr;
+    struct timeval timeout;
+    fd_set reads, cpy_reads;
+
+    socklen_t adr_sz;
+    int fd_max, fd_num, str_len, i;
+    char buf[BUF_SIZE];
+    if(argc!=2)
+    {
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error");
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error");
+
+    FD_ZERO(&reads);  //初始化
+    /* 向fd_set变量注册服务器端套接字，这样接收数据情况的监视对象就包含了服务器端套接字。客户端的连接请求
+       同样通过传输数据完成。因此，服务器端套接字中有接收的数据，就意味着有新的连接请求。 */
+    FD_SET(serv_sock, &reads);
+    fd_max = serv_sock;
+
+    while (1)
+    {
+        cpy_reads = reads;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 5000;
+
+        if((fd_num = select(fd_max+1, &cpy_reads, 0, 0, &timeout)) == -1)
+            break;
+        if(fd_num == 0)
+            continue;
+
+        for(i=0; i<fd_max+1; i++)
+        {
+            if(FD_ISSET(i, &cpy_reads))  //查找发生变化的（有接收数据的）文件描述符
+            {
+                if(i == serv_sock)  //connection request
+                {
+                    adr_sz = sizeof(clnt_adr);
+                    clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &adr_sz);
+                    FD_SET(clnt_sock, &reads);
+                    if(fd_max < clnt_sock)
+                        fd_max = clnt_sock;
+                    printf("connected client: %d \n", clnt_sock);
+                }
+                else  //read message
+                {
+                    str_len = read(i, buf, BUF_SIZE);
+                    //接收的数据为EOF时需要关闭套接字，并从reads中删除相应信息
+                    if(str_len == 0)
+                    {
+                        FD_CLR(i, &reads);
+                        close(i);
+                        printf("close client: %d \n", i);
+                    }
+                    //接收的数据为字符串时，执行回声服务
+                    else
+                    {
+                        write(i, buf, str_len);  //echo!
+                    }
+                }
+            }
+        }
+    }
+    close(serv_sock);
+    return 0;
+}
+
+void error_handling(char *message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：
+![](assets/image-selserv.png)
+
+![](assets/image-selclient1.png)
+
+![](assets/image-selclient2.png)
+
+**对该代码`select`函数部分进行解释：**
+**1. 文件描述符集合初始化**
+``` c
+FD_ZERO(&reads);  // 初始化fd_set变量
+FD_SET(serv_sock, &reads);  // 将服务器套接字加入监视集合
+fd_max = serv_sock;  // 设置当前最大文件描述符
+```
+- `FD_ZERO(&reads)`：清空reads集合，准备开始监视
+- `FD_SET(serv_sock, &reads)`：将服务器套接字加入监视集合，用于检测新连接
+- `fd_max`：记录当前最大的文件描述符值，用于select的第一个参数
+
+**2. select主循环**
+``` c
+while (1)
+{
+    cpy_reads = reads;  // 复制原始集合
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 5000;  // 设置5秒5毫秒超时
+
+    if((fd_num = select(fd_max+1, &cpy_reads, 0, 0, &timeout)) == -1)
+        break;  // select出错退出
+    if(fd_num == 0)
+        continue;  // 超时但没有事件，继续循环
+
+    ...
+}
+```
+- `cpy_reads = reads`：select会修改传入的fd_set，所以需要先复制一份
+- `timeout`设置：5秒5毫秒超时，超时后select返回0
+- `select(fd_max+1, ...)`：监视从0到fd_max的所有文件描述符
+  - 第一个参数：最大文件描述符+1
+  - 第二个参数：要监视可读的文件描述符集合
+  - 最后参数：超时时间
+
+**3. 处理就绪的文件描述符**
+``` c
+for(i=0; i<fd_max+1; i++)
+{
+    if(FD_ISSET(i, &cpy_reads))  // 检查哪些fd有事件
+    {
+        if(i == serv_sock)  // 服务器套接字就绪，表示有新连接
+        {
+            adr_sz = sizeof(clnt_adr);
+            clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &adr_sz);
+            FD_SET(clnt_sock, &reads);  // 将新客户端加入监视集合
+            if(fd_max < clnt_sock)
+                fd_max = clnt_sock;  // 更新最大文件描述符
+            printf("connected client: %d \n", clnt_sock);
+        }
+        else  // 客户端套接字就绪，表示有数据到达
+        {
+            str_len = read(i, buf, BUF_SIZE);
+            if(str_len == 0)  // 客户端关闭连接
+            {
+                FD_CLR(i, &reads);  // 从监视集合中移除
+                close(i);  // 关闭套接字
+                printf("close client: %d \n", i);
+            }
+            else  // 正常数据
+            {
+                write(i, buf, str_len);  // 回声服务
+            }
+        }
+    }
+}
+```
+**服务器套接字就绪处理：**
+- 当`i == serv_sock`时，表示有新连接请求
+- 调用`accept()`接受新连接
+- 将新客户端套接字加入监视集合(`FD_SET`)
+- 更新`fd_max`（如果需要）
+
+**客户端套接字就绪处理：**
+- 调用`read()`读取客户端数据
+- 如果`read()`返回0，表示客户端关闭连接：
+  - 从监视集合中移除(`FD_CLR`)
+  - 关闭套接字(`close`)
+- 如果读取到数据，原样回写给客户端(`write`)
+
+<br>
+
+**对`fd_max`两次赋值的解释**
+**1. `fd_max = serv_sock`（初始化阶段）**
+  - `fd_max` 表示当前需要监视的 **最大文件描述符值 + 1**（因为 `select` 的第一个参数要求传入 `nfds`，即最大 **fd + 1**）。
+  - 初始时，服务器**只有一个套接字 `serv_sock`**（监听套接字），因此 `fd_max` 直接赋值为 `serv_sock`。
+
+**2. `fd_max = clnt_sock`（接受新连接时）**
+  - 当 accept() 返回一个新的客户端套接字 clnt_sock` 时，需要判断：
+    ``` c
+    if (fd_max < clnt_sock)
+        fd_max = clnt_sock;
+     ```
+  - 如果 `clnt_sock` 比当前的 `fd_max` 更大，则更新 `fd_max`。
+
+**为什么`fd_max`需要更新？**
+  - 文件描述符是递增分配的。例如：  
+    - `serv_sock` = 3（监听套接字）
+    - 第一个 `clnt_sock` = 4
+    - 第二个 `clnt_sock` = 5
+    - ...
+  - 如果不更新 `fd_max`，`select` 只会检查到旧的 `fd_max`，**导致新连接的客户端无法被监视**。
+
+**示例流程**
+1. **服务器启动**，`serv_sock` = 3，`fd_max` = 3。
+2. **客户端A连接**，`accept` 返回 `clnt_sock` = 4，此时 4 > 3，所以更新 `fd_ma`x = 4。
+3. **客户端B连接**，`accept` 返回 `clnt_sock` = 5，此时 5 > 4，更新 `fd_max` = 5。
+4. **客户端A断开连接**，但 `fd_max` 仍为 5（因为可能有其他活跃连接）。
+5. 如果所有客户端断开，fd_max 会回退到 serv_sock（但代码中未显式处理，通常不影响）。
