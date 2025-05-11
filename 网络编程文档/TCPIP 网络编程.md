@@ -8282,3 +8282,513 @@ else {
 若不使用`cpy_reads`，则在第一次调用`select`函数后，如果无事件，`select`返回后 **`reads` 变为 {}**（被清空）。
 
 此时`reads` 已经是空集合，即使有新连接或数据到达，`select` 也无法检测到！
+
+（基于Winodws实现的I/O服务器端已给出代码，具体讨论在此省略）
+
+## 13 多种 I/O 函数
+
+### 13.1 send & recv 函数
+
+虽然第1章已介绍过`send` & `recv`函数，但那时是基于Winodws平台介绍的。本节将介绍Linux平台下的`send` & `recv`函数。**其实二者并无差别**。
+
+``` c
+#include <sys/socket.h>
+
+ssize_t send(int sockfd, const void* buf, size_t nbytes, int flags);
+//成功时返回发送的字节数，失败时返回-1
+```
+- `sockfd` 表示与数据传输对象连接的套接字文件描述符
+- `buf` 保存待传输数据的缓冲地址值
+- `nbytes` 待传输的字节数
+- `flags` 传输数据时指定的可选项信息
+
+与第一章的Windows中的`send`函数相比，上述函数在声明的结构体名称上有些区别。但参数的顺序、含义、使用方法完全相同，因此实际区别差别不大。接下来介绍`recv`函数相比也没有太大区别。
+
+``` c
+#include <sys/socket.h>
+
+ssize_t recv(int sockfd, void* buf, size_t nbytes, int flags);
+//成功时返回接收的字节数（受到EOF时返回0），失败时返回-1
+```
+- `sockfd` 表示与数据接收对象连接的套接字文件描述符
+- `buf` 保存接收数据的缓冲地址值
+- `nbytes` 可接收的最大字节数
+- `flags` 接收数据时指定的可选项信息
+
+`send`和`recv`函数的最后一个参数时**收发数据时的可选项**。该可选项可利用**位或**（bit OR）运算（运算符）同时传递多个信息。通过表13-1整理可选项的种类及含义。
+
+<img src="assets/image-b13.1.png" width="80%" alt="b13-1">
+
+另外，不同操作系统对上述可选项的支持也不同。下面选取表13-1中的一部分（不受操作系统影响的）进行详解。
+
+
+#### MSG_OOB：发送紧急消息
+
+`MSG_OOB` 可选项用于**发送“带外数据”紧急消息**。
+
+假设医院有很多病人等待看病，此时若有急诊患者，则应当优先处理。正因如此医院会设立单独的急诊室。需紧急处理时，应采用不同的处理方法和通道。`MSG_OOB` 可选项就用于**创建特殊发送方法和通道以发送紧急消息**。下面示例通过`MSG_OOB`可选项收发数据。使用`MSG_OOB`时需要一些拓展知识，这部分通过源代码进行讲解。
+
+**`oob_send.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
+#define BUF_SIZE 30
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    struct sockaddr_in recv_adr;
+    if(argc!=3)
+    {
+        printf("Usage: %s <IP> <port> \n", argv[0]);
+        exit(1);
+    }
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&recv_adr, 0, sizeof(recv_adr));
+    recv_adr.sin_family = AF_INET;
+    recv_adr.sin_addr.s_addr = inet_addr(argv[1]);
+    recv_adr.sin_port = htons(atoi(argv[2]));
+
+    if(connect(sock, (struct sockaddr*)&recv_adr, sizeof(recv_adr)) == -1)
+        error_handling("connect() error!");
+
+    write(sock, "123", strlen("123"));
+    send(sock, "4", strlen("4"), MSG_OOB);
+    sleep(1);  //增加间隔以确保收到两次OOB消息
+    write(sock, "567", strlen("567"));
+    send(sock, "890", strlen("890"), MSG_OOB);
+
+    close(sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+ 
+上述示例中，调用`send`函数**紧急传输数据**。正常顺序应该是123、4、567、890,但紧急传输了4和890,由此可知接收顺序也将改变。
+
+从上述示例可以看出，紧急消息的传输比即将介绍的接收过程要简单，只需在调用`send`函数时指定`MSG_OOB`可选项。接收紧急消息的过程要相对复杂一点。
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+
+#define BUF_SIZE 30
+void error_handling(char* message);
+void urg_handler(int signo);
+
+int acpt_sock;
+int recv_sock;
+
+int main(int argc, char* argv[])
+{
+    struct sockaddr_in recv_adr, serv_adr;
+    int srt_len, state;
+    socklen_t adr_sz;
+    struct sigaction act;
+    char buf[BUF_SIZE];
+    if(argc!=2)
+    {
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    act.sa_handler = urg_handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+
+    acpt_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&recv_adr, 0, sizeof(recv_adr));
+    recv_adr.sin_family = AF_INET;
+    recv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    recv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(acpt_sock, (struct sockaddr*)&recv_adr, sizeof(recv_adr)) == -1)
+        error_handling("bind() error!");
+    listen(acpt_sock, 5);
+
+    adr_sz = sizeof(serv_adr);
+    recv_sock = accept(acpt_sock, (struct sockaddr*)&serv_adr, &adr_sz);
+
+    fcntl(recv_sock, F_SETOWN, getpid());
+    state = sigaction(SIGURG, &act, 0);   //收到MSG_OOB紧急消息时，操作系统将产生SIGURG信号
+
+    while((srt_len = recv(recv_sock, buf, sizeof(buf), 0)) != 0)
+    {
+        if(srt_len == -1)
+            continue;
+        buf[srt_len] = 0;
+        puts(buf);
+    }
+    close(recv_sock);
+    close(acpt_sock);
+    return 0;
+}
+
+void urg_handler(int singo)
+{
+    int str_len;
+    char buf[BUF_SIZE];
+    str_len = recv(recv_sock, buf, sizeof(buf)-1, MSG_OOB);
+    buf[str_len] = 0;
+    printf("Urgent message: %s \n", buf);
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+在上述示例中，`acpt_sock` 等同于 `serv_sock`，`recv_sock` 等同于 `clnt_sock`。
+
+（运行结果先省略，具体原因后面会讲）
+
+下面详细讲解 `fcntl` 函数。
+``` c
+fcntl(recv_sock, F_SETOWN, getpid());
+```
+`fcntl`函数用于**控制文件描述符**，但上述调用语句的含义如下：
+
+“将文件描述符recv_sock指向的套接字拥有者（F_SETOWN）改为把getpid函数返回值用作ID的进程。”
+
+操作系统实际创建并管理套接字，所以从严格意义上说，“套接字拥有者”是操作系统。只是此处所谓的“拥有者”是指负责套接字所有务的主体。上述描述可简要概括如下：
+
+“文件描述符 **`recv_sock`指向的套接字** 引发的 **`SIGURG`信号处理进程** 变为 **将`getpid`函数返回值用作ID的进程**。”
+
+上述描述中的“处理SIGURG信号”指的是“调用`SIGURG`信号处理函数（`urg_handler`）”。但之前讲过，多个进程可以共同拥有1个套接字的文件描述符。例如，通过`fork`函数创建子进程并同时复制文件描述符。此时如果发生`SIGURG`信号，应该调用哪个进程的信号处理函数呢？因此，**处理`SIGURG`信号时必须指定处理信号的进程，而`getpid`函数返回调用此函数进程的ID**。上述调用语句指定**当前进程**为处理`SIGURG`信号的主体。该程序中只创建了1个进程，因此，理应由该进程处理`SIGURG`信号。
+
+接下来给出运行结果，再讨论剩下的问题。
+
+![](assets/image-obb_recv.png)
+
+可以明显看出，通过`MSG_OOB`可选项传递数据时不会加快数据传输速度，而且通过信号处理函数`urg_handler`读取数据时也**只能读1个字节**（OOB为 `890` 但最终只返回 `0`）。剩余数据只能通过未设置`MSG_OOB`可选项的普通输入函数读取。这是因为**TCP不存在真正意义上的“带外数据”**。实际上，`MSG_OOB`中的OOB是指Out-of-band，而“带外数据”的含义是：
+
+“通过完全不同的通信路径传输的数据。”
+
+即真正意义上的Out-of-band需要通过单独的通信路径告诉传输数据，但TCP不另外提供，只利用TCP的**紧急模式**（Urgent mode）进行传输。
+
+
+#### 紧急模式工作原理
+
+`MSG_OOB`的真正意义在于**督促数据接收对象尽快处理数据**。这是紧急模式的全部内容，而且TCP“保持传输顺序”的传输特性依然成立。
+
+急诊患者的及时救治需要两个条件：迅速入院和医院急救。无法快速把病人送到医院，并不意味着不需要医院进行急救。TCP的紧急消息无法保证及时入院，但可以要求急救。当然，急救措施由程序员完成。之前的示例`oob_secv.c`的运行过程中也传递了紧急消息，这可以通过事件处理函数确认。这就是`MSG_OOB`模式数据传输的实际意义。下面给出设置`MSG_OOB`可选项状态下的数据传输过程，如图13-1所示。
+
+<img src="assets/image-13.1.png" width="40%" alt="13-1">
+
+图13-1给出的是示例`oob_send.c`第二次调用`send`函数后的输出缓冲状态，此处假设已传输之前的数据。
+``` c
+send(sock, "890", strlen("890"), MSG_OOB);
+```
+
+如果将缓冲最左端的位置视作偏移量为0,字符0保存于偏移量为2的位置。另外，字符0右侧偏移量为3的位置存有**紧急指针**（Urgent Pointer）。紧急指针指向**紧急消息的下一个位置**（偏移量加1），同时向对方主机传递如下信息：
+
+“紧急指针指向的偏移量为3之前的部分就是紧急消息！”
+
+也就是说，实际**只用1个字节表示紧急消息信息**。这一点可通过图13-1中用于传输数据的TCP数据包（段）的结构看的更清楚，如图13-2所示。
+
+<img src="assets/image-13.2.png" width="40%" alt="13-2">
+
+TCP数据包实际包含更多信息，但图13-2只标注了与我们主体相关的内容。TCP头中含有如下两种信息。
+- URG=1：载有**紧急消息**的数据包
+- URG指针：紧急指针位于偏移量为3的位置
+
+指定`MSG_OOB`选项的数据包本身就是紧急数据包，并通过紧急指针表示紧急消息所在位置，但通过图13-2无法得知紧急消息的字符串，但这并不重要。如前所述，除**紧急指针的前面1个字节**外，数据接收方将通过常用输入函数读取剩余部分。换言之，紧急消息的意义在于**督促消息处理**，而非紧急传输形式受限的消息。
+
+---
+**计算机领域的偏移量（offset）**
+
+学习计算机相关领域时，会经常接触术语“偏移量”，下面简单说明含义。很多人通常认为偏移量就是从0开始每次增1的值。的确如此，但更准确第说，其含义如下：
+
+“偏移量就是**参照基准位置表示相对位置**的量”
+
+为了理解这一点，可以看图13-3，图中标有实际地址和偏移地址。
+
+<img src="assets/image-13.3.png" width="40%" alt="13-3">
+
+图13-3给出了以实际地址3为基址计算偏移地址的过程。可以看到，偏移量表示**距离基准点向哪个方向偏移多长距离**。因此，与普通地址不同，偏移地址每次从0开始。
+
+---
+
+
+#### 检查输入缓冲
+
+同时设置`MSG_PEEK`选项和`MSG_DONTWAIT`选项，以验证输入缓冲中是否存在接收的数据。设置`MSG_PEEK`选项并调用`recv`函数时，即使读取了输入缓冲的数据也不会删除（**读取后数据仍然保留在缓冲区中，不会被移除**）。因此，该选项通常与`MSG_DONTWAIT`合作，用于调用以非阻塞方式验证待读数据存在与否的函数。下面通过示例了解二者含义。
+
+**`peek_send.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    struct sockaddr_in send_adr;
+    if(argc!=3)
+    {
+        printf("Usage: %s <IP> <port> \n", argv[0]);
+        exit(1);
+    }
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&send_adr, 0, sizeof(send_adr));
+    send_adr.sin_family = AF_INET;
+    send_adr.sin_addr.s_addr = inet_addr(argv[1]);
+    send_adr.sin_port = htons(atoi(argv[2]));
+
+    if(connect(sock, (struct sockaddr*)&send_adr, sizeof(send_adr)) == -1)
+        error_handling("connect() error!");
+
+    write(sock, "123", strlen("123"));
+    close(sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+上述示例不需要过多赘述。下列示例给出了使用`MSG_PEEK`和`MSG_DONTWAIT`选项的结果。
+
+**`peek_recv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#define BUF_SIZE 30
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int acpt_sock, recv_sock;
+    struct sockaddr_in acpt_adr, recv_adr;
+    int str_len;
+    socklen_t adr_sz;
+    char buf[BUF_SIZE];
+    if(argc!=2)
+    {
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    acpt_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&acpt_adr, 0, sizeof(acpt_adr));
+    acpt_adr.sin_family = AF_INET;
+    acpt_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    acpt_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(acpt_sock, (struct sockaddr*)&acpt_adr, sizeof(acpt_adr)) == -1)
+        error_handling("bind() error!");
+    listen(acpt_sock, 5);
+
+    adr_sz = sizeof(recv_adr);
+    recv_sock = accept(acpt_sock, (struct sockaddr*)&recv_adr, &adr_sz);
+
+    while(1)
+    {
+        //调用recv函数的同时传递MSG_PEEK可选项，这是为了保证即使不存在待读取数据也不会进入阻塞状态
+        str_len = recv(recv_sock, buf, sizeof(buf)-1, MSG_PEEK|MSG_DONTWAIT);
+        if(str_len > 0)
+            break;
+    }
+
+    buf[str_len] = 0;
+    printf("Buffering %d bytes: %s \n", str_len, buf);
+
+    //再次调用recv函数。此次调用未设置任何可选项，因此本次读取的数据将从输入缓冲中删除
+    str_len = recv(recv_sock, buf, sizeof(buf)-1, 0); 
+    buf[str_len] = 0;
+    printf("Read again: %s \n", buf);
+    close(recv_sock);
+    close(acpt_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：
+
+![](assets/image-precv.png)
+
+通过运行结果可以验证，仅发送1次的数据被读取了2次，因为第一次调用`recv`函数时设置了`MSG_PEEK`可选项。
+
+`MSG_PEEK`可选项适用于需要**预先检查数据内容（预读）**再决定如何处理的情况。如检查数据是否完整或是否符合某种协议格式。
+
+
+### 13.2 readv & writev 函数
+
+本节介绍的`readv` & `writev` 函数有助于提高数据通信效率。先介绍这些函数的使用用法，再讨论其合理的应用场景。
+
+
+#### 使用 readv & writev 函数
+
+`readv` & `writev` 函数的功能可概括如下：
+
+“对数据进行**整合传输及发送**的函数”
+
+也就是说，通过`writev`函数可以**将分散保存在多个缓冲区的数据一并发送**，通过`readv`函数可以**由多个缓冲区分别接收**。因此，适当使用这2个函数可以减少I/O函数的调用次数。下面先介绍`writev`函数
+
+``` c
+#include <sys.uio.h>
+
+ssize_t writev(int filedes, const struct iovec * iov, int iovcnt);
+//成功时返回发送的字节数，失败时返回-1
+```
+- `filedes` 表示数据传输对象的套接字文件描述符。但该函数**并不只限于套接字**，因此可以像`read`函数一样向其传递文件或标准输出描述符。
+- `iov` `iovec`结构体数组的地址值，结构体`iovec`中包含**待发送数据的位置和大小**信息。
+- `iovcnt` 向第二个参数传递的数组长度
+
+上述函数的第二个参数中出现的数组`iovec`结构体的声明如下：
+``` c
+struct iovec
+{
+    void * iov_base;  //缓冲地址
+    size_t iov_len;   //缓冲大小
+}
+```
+
+可以看到，结构体`iovec`由保存待发送数据的缓冲（`char`型数组）地址值和实际发送的数据长度信息构成。给出上述函数的调用示例前，先通过图13-4了解该函数的使用方法。
+
+<img src="assets/image-13.4.png" width="60%" alt="13-4">
+
+图13-4中`writev`的第一个参数1是文件描述符，因此向控制台输出数据，`ptr`是存有待发送数据信息的`iovec`数组指针。第三个参数为2，因此从`ptr`指向的地址开始，共浏览2个`iovec`结构体变量，发送这些指针指向的缓冲数据。接下来观察图中的`iovec`结构体数组。`ptr[0]`（数组第一个元素）的`iov_base`指向以A开头的字符串，同时`iov_len`为3,故发送ABC。而`ptr[1]`（数组的第二个元素）的`iov_base`指向数字1,同时`iov_len`为4,故发送1234。
+
+相信已稍微了解了`writev`函数的使用方法和特性，接下来给出示例。
+
+**`writev`**
+
+``` c
+#include <stdio.h>
+#include <sys/uio.h>
+
+int main(int argc, char* argv[])
+{
+    struct iovec vec[2];
+    char buf1[] = "ABCDEFG";
+    char buf2[] = "1234567";
+    int str_len;
+
+    vec[0].iov_base = buf1;
+    vec[0].iov_len = 3;
+    vec[1].iov_base = buf2;
+    vec[1].iov_len = 4;
+
+    str_len = writev(1, vec, 2); //第一个参数为1所以直接向控制台输出数据
+    puts("");
+    printf("Write bytes: %d \n", str_len);
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-wv.png)
+
+下面介绍`readv`函数，它与`writev`函数正好相反。
+
+``` c
+#include <sys.uio.h>
+
+ssize_t readv(int filedes, const struct iovec * iov, int iovcnt);
+//成功时返回接收的字节数，失败时返回-1
+```
+- `filedes` 传递接收数据的文件（或套接字）描述符。
+- `iov` 包含数据保存位置和大小信息的`iovec`结构体数组的地址值。
+- `iovcnt` 第二个参数中数组的长度。
+
+我们已经学习了`writev`函数，因此直接通过示例给出`readv`函数的使用方法。
+
+**`readv.c`**
+
+``` c
+#include <stdio.h>
+#include <sys/uio.h>
+#define BUF_SIZE 30
+
+int main(int argc, char* argv[])
+{
+    struct iovec vec[2];
+    char buf1[BUF_SIZE] = {0,};
+    char buf2[BUF_SIZE] = {0,};
+    int str_len;
+
+    vec[0].iov_base = buf1;
+    vec[0].iov_len = 5;          //指定接收数据大小为5,即vec[0]中注册的缓冲保存5个字节
+    vec[1].iov_base = buf2;
+    vec[1].iov_len = BUF_SIZE;   //剩余数据保存到vec[1]中注册的缓冲，所以应写入接收的最大字节数
+
+    str_len = readv(0, vec, 2);  //第一个参数为0,因此从标准输入接收数据
+    printf("Read bytes: %d \n", str_len);
+    printf("First message: %s \n", buf1);
+    printf("Second message: %s \n", buf2);
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-rv.png)
+
+由运行结果可知，声明的`iovec`型数组`vec`保存了数据。
+
+
+#### 合理使用 readv & writev 函数
+
+哪种情况适合使用`read`和`writev`函数？实际上，能使用该函数的所有情况都适用。例如，需要传输的数据分别位于不同缓冲（数组）时，需要多次调用`write`函数。此时可以通过1次`writev`函数调用替代操作，当然会提高效率。同样，需要将输入缓冲的数据读如不同位置时，可以不必多次调用`read`函数，而是利用1次`readv`函数就能大大提高效率。
+
+即使仅从C语言角度看，减少函数调用次数也能相应提高性能。但其更大的意义在于减少数据包个数。假设为了提高效率而在服务器端明确阻止了Nagle算法。其实`writev`函数在不采用Nagle算法时更有价值，如图13-5所示。
+
+<img src="assets/image-13.5.png" width="60%" alt="13-5">
+
+上述示例中待发送的数据分别存在3个不同的地方，此时如果使用`write`函数则需要3次函数调用。但若为提高速度而关闭了Nagle算法，则即有可能通过3个数据包传递数据。反之，若使用`writev`函数将所有数据一次性写入输出缓冲，则很有可能仅通过1个数据包传输数据。所以`writev`函数和`readv`函数非常有用。
+
+再考虑一种情况：将不同位置的数据按照发送顺序移动（复制）到1个大数组，并通过1次`write`函数调用进行传输。这种方式与调用`writev`函数的效果相同，且更为便利。因此如果遇到适用`writev`函数和`readv`函数的情况，希望不要错过机会。
+
+
