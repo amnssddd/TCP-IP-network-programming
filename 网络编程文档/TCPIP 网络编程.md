@@ -8792,3 +8792,379 @@ int main(int argc, char* argv[])
 再考虑一种情况：将不同位置的数据按照发送顺序移动（复制）到1个大数组，并通过1次`write`函数调用进行传输。这种方式与调用`writev`函数的效果相同，且更为便利。因此如果遇到适用`writev`函数和`readv`函数的情况，希望不要错过机会。
 
 
+## 14 多播与广播
+
+
+### 14.1 多播
+
+多播（Multicast）方式的数据传输是**基于UDP**完成的。因此，与UDP服务器端/客户端的实现方式非常接近。区别在于，UDP数据传输以单一目标进行，而多播数据同时传递到加入（注册）特定组的大量主机。换言之，**采用多波方式时，可以同时向多个主机传递数据**。
+
+
+#### 多波的数据传输方式及流量方面的优点
+
+多播的数据传输特点可整理如下.
+- 多播服务器端针对特定多播组，只发送1次数据。
+- 即使只发送1次数据，但该组内的所有客户端都会接收数据
+- 多播组数可在IP地址范围内任意增加
+- 加入特定组即可接收 发往该多播组的数据
+
+多播组是D类IP地址（224.0.0.0 ~ 239.255.255.255），“加入多播组”可以理解为通过程序完成如下说明：
+
+“在D类IP地址中，我希望接收发往目标239.234.218.234的多播数据。”
+
+多播是基于UDP完成的，也就是说，多播数据包的格式与UDP数据包相同。只是与一般的UDP数据包不同，有网络传递1个多播数据包时，路由器将复制该数据包并传递到多个主机。像这样，多播需要借助路由器完成，如图14-1所示。
+
+<img src="assets/image-14.1.png" width="60%" alt="14-1">
+
+图13-1表示传输至AAA组的多播数据包借助路由器传递到加入AAA组的所有主机的过程。
+
+由于路由器频繁复制同一数据包，所以不利于网络流量。若TCP或UDP向1000个主机发送文件，则共需要传递1000次。即使10台主机合为1个网络，使99%的传输路径相同的情况下也是如此。但此时若使用多播方式传输文件，则只需要发送1次。这时由1000台主机构成的网络中的路由器负责复制文件并传递到主机。就因为这种特性，多播主要用于“多媒体数据的实时传输”。
+
+
+#### 路由（Routing）和 TTL（Time to love，生存时间），以及加入组的方法
+
+接下来讨论多播相关编程方法。为了传递多播数据包，必须设置TTL。TTL时是Time to live的简写，是决定“**数据包传递距离**”的主要因素。TTL用整数表示，并且每经过1个路由器就减1。**TTL变为0时，该数据包无法再被传递，只能销毁**。因此，TTL的值设置过大将影响网络流量，过小则无法传递到目标，需要引起注意。
+
+<img src="assets/image-14.2.png" width="60%" alt="14-2">
+
+接下来给出TTL设置方法。程序中的TTL设置是通过第9章的套接字可选项完成的。与设置TTL相关的协议为`IPPROTO_IP`，选项名为`IP_MULTICAST_TTL`。因此，可以用如下代码把TTL设置为64.
+
+```c
+int send_sock;
+int time_live = 64;
+. . . .
+send_sock = socket(PF_INET,SOCK_DGRAM,0);
+setsockopt(send_sock, IPPROTO_IP, IP_MULTICAST_TTL, (void*)& time_live, sizeof(time_live));
+. . . .
+```
+
+另外，加入多播组也通过设置套接字选项完成。加入多播组相关的协议层为`IPPROTO_IP`，选项名为`IP_ADD_MEMBERSHIP`。可通过如下代码加入多播组。
+``` c
+int recv_sock;
+struct ip_mreq join_adr;
+. . . .
+recv_sock = socket(PF_INET, SOCK_DGRAM, 0);
+. . . .
+join_adr.imr_multiaddr.s_addr = "多播组地址信息";
+join_adr.imr_interface.s_addr = "加入多播组的主机地址信息";
+setsockopt(recv_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)& join_adr, sizeof(join_adr));
+```
+
+上述代码只给出了与`setsockopt`函数相关的部分，详细内容将在稍后示例中给出。此处只讲解`ip_mreq`结构体，该结构体定义如下。
+``` c
+struct ip_mreq
+{
+    struct in_addr imr_multiaddr;
+    struct in_addr imr_interface;
+}
+```
+
+第3章讲过`in_addr`结构体，因此只介绍结构体成员。首先，第一个成员`imr_multiaddr`中写入**加入的组IP地址**。第二个成员`imr_interface`是**加入该组的套接字所属主机的IP地址**，也可以使用`INADDR_ANY`。
+
+
+#### 实现多播 Sender 和 Receiver
+
+多播中用“发送者”（以下称为Sender）和“接受者”（以下称为Receiver）替代服务器端和客户端。顾名思义，此处的Sender是多播数据的发送主体，Receiver是需要多播组加入过程的数据接收主体。下面讨论即将给出的示例，该示例的运行场景如下。
+- Sender：向AAA组广播（Broadcasting）文件中保存的新闻信息
+- Receiver：接收传递到AAA组的新闻信息
+
+接下来给出Sender代码。Sender比Receiver简单，因为Receiver需要经过加入组的过程，而Sender只需创建UDP套接字，并向多播地址发送数据。
+
+**`news_sender`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#define TTL 64
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int send_sock;
+    struct sockaddr_in mul_adr;
+    int time_live = TTL;
+    FILE *fp;
+    char buf[BUF_SIZE];
+    if(argc!=3)
+    {
+        printf("Usage: %s <IP> <port> \n", argv[0]);
+        exit(1);
+    }
+
+    //多播数据通信是通过UDP完成的，因此创建UDP套接字
+    send_sock = socket(PF_INET, SOCK_DGRAM, 0);
+    memset(&mul_adr, 0, sizeof(mul_adr));
+    mul_adr.sin_family = AF_INET;
+    mul_adr.sin_addr.s_addr = inet_addr(argv[1]); //必须将IP地址设置为多播地址
+    mul_adr.sin_port = htons(atoi(argv[2]));
+    
+    //指定套接字TTL信息，这是Sender中的必要过程
+    setsockopt(send_sock, IPPROTO_IP, IP_MULTICAST_TTL, (void*)&time_live, sizeof(time_live));
+    if((fp = fopen("news.txt", "r")) == NULL)
+        error_handling("fopen() error");
+
+    while (fgets(buf, BUF_SIZE, fp) != NULL)
+    {
+        sendto(send_sock, buf, strlen(buf), 0, (struct sockaddr*)&mul_adr, sizeof(mul_adr));
+        sleep(2);   //给数据传输提供一定时间间隔而添加的，没有其他特殊意义
+    }
+    fclose(fp);
+    close(send_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+**`news_receiver`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <errno.h>
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int recv_sock;
+    int str_len;
+    char buf[BUF_SIZE];
+    struct sockaddr_in adr;
+    struct ip_mreq join_adr;
+    struct timeval tv;
+    if(argc!=3)
+    {
+        printf("Usage: %s <IP> <port> \n", argv[0]);
+        exit(1);
+    }
+
+    recv_sock = socket(PF_INET, SOCK_DGRAM, 0);
+    memset(&adr, 0, sizeof(adr));
+    adr.sin_family = AF_INET;
+    adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    adr.sin_port = htons(atoi(argv[2]));
+
+    if(bind(recv_sock, (struct sockaddr*)&adr, sizeof(adr)) == -1)
+        error_handling("bind() error");
+
+    //加入多播组，初始化结构体ip_merg变量
+    join_adr.imr_multiaddr.s_addr = inet_addr(argv[1]);  //要加入的多播组IP地址（从命令行参数argv[1]获取）
+    join_adr.imr_interface.s_addr = htonl(INADDR_ANY);   //指定本地接口（INADDR_ANY表示任意接口）
+    //利用套接字选项IP_ADD_MEMBERSHIP加入多播组。至此完成了接收多播组数据的所有准备
+    setsockopt(recv_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)&join_adr, sizeof(join_adr));
+
+    //设置接收超时
+    tv.tv_sec = 5;  // 5秒超时
+    tv.tv_usec = 0;
+    //如果在指定时间内没有收到数据，recvfrom将返回-1并设置errno为EAGAIN或EWOULDBLOCK
+    setsockopt(recv_sock, SOL_SOCKET, SO_RCVTIMEO, (void*)&tv, sizeof(tv));  //SO_RCVTIMEO:设置接收超时
+
+    while (1) {
+        str_len = recvfrom(recv_sock, buf, BUF_SIZE-1, 0, NULL, 0);  //NULL表示不关心发送方地址
+        if(str_len < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("Receive timeout, exit normally\n");
+                break;
+            } else {
+                perror("recvfrom");
+            }
+        }
+        buf[str_len] = 0;
+        fputs(buf, stdout);
+    }
+    close(recv_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+运行结果：
+
+![](assets/image-receiver.png)
+
+运行顺序推荐先运行接收端`news_receiver.c`，再运行发送端`news_sender.c`。实际上运行顺序不太重要，因为不像TCP套接字那样要在连接状态下收发数据，只要**加入多播组就能收发数据**。只是因为多播属于广播的范畴，如果延迟运行Receiver，则无法接收之前传输的多播数据。
+
+![](assets/image-MBone.png)
+
+
+### 14.2 广播
+
+本节介绍的广播（Broadcasting）在“一次性向多个主机发送数据”这一点与多播类似，但传输数据的范围有区别。多播即使在跨越不同网络的情况下，只要加入多播组就能接收数据。相反，**广播只能向同一网络中的主机传输数据**。
+
+
+#### 广播的理解及实现方法
+
+广播是**向同一网络的所有主机传输数据**的方法。与多播相同，广播也是**基于UDP**完成的。根据传输数据时**使用的IP地址**的形式，广播分如下2种。
+- 直接广播（Directed Broadcast）
+- 本地广播（Local Broadcast）
+
+二者在代码上的差别主要在于**IP地址**。直接广播的IP地址中除了网络地址外，其余主机地址全部设置为1。例如，希望向网络地址`192.12.34`中的所有主机传输数据时，可以向`192.12.34.255`传输。换言之，**可以采用直接广播的方式向特定区域内所有主机传输数据**。
+
+反之，**本地广播中使用的IP地址限定为`255.255.255.255`**。例如，`192.32.24`网络中的主机向`255.255.255.255`传输数据时，数据将传递到`192.32.24`网络中的所有主机。
+
+那么此时应如何实现Sender和Receiver呢？实际上，如果不仔细观察广播示例中通信使用的IP地址，则很难与UDP示例进行区分。也就是说，数据通信中使用的IP地址是与UDP示例的唯一区别。默认生成的套接字会阻止广播，因此，只需通过如下代码更改默认设置。
+
+``` c
+int send_sock;
+int bcast = 1;
+. . . .
+send_sock = sockt(PF_INET, SOCK_DGRAM, 0);
+. . . .
+setsockopt(send_sock, SOL_SOCKET, SO_BROADCAST, (void*)& bcast, sizeof(bcast));
+. . . .
+```
+
+调用`setsockopt`函数，将`SO_BROADCAST`选项设置为`bcast`变量中的值1.这意味着**可以进行**数据广播。当然，上述套接字选项只需在Sender中更改，Receiver的实现不需要该过程。
+
+
+#### 实现广播数据的 Sender 和 Receiver
+
+下面实现**基于广播**的Sender和Receiver。为了与多播示例进行对比，将之前的`news_sender.c`和`news_receiver.c`改为广播示例。
+
+**`news_sender_brd.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char *message);
+
+int main(int argc, char* argv[])
+{
+    int send_sock;
+    struct sockaddr_in broad_adr;
+    FILE* fp;
+    char buf[BUF_SIZE];
+    int so_brd = 1;
+    if(argc!=3)
+    {
+        printf("Usage: %s <IP> <port> \n", argv[0]);
+        exit(1);
+    }
+
+    send_sock = socket(PF_INET, SOCK_DGRAM, 0);
+    memset(&broad_adr, 0, sizeof(broad_adr));
+    broad_adr.sin_family = AF_INET;
+    broad_adr.sin_addr.s_addr = inet_addr(argv[1]);
+    broad_adr.sin_port = htons(atoi(argv[2]));
+
+    //启用套接字的广播功能
+    setsockopt(send_sock, SOL_SOCKET, SO_BROADCAST, (void*)&so_brd, sizeof(so_brd));
+    if((fp = fopen("news.txt", "r")) == NULL)
+        error_handling("fopen() error");
+    
+    while (fgets(buf, BUF_SIZE, fp) != NULL)
+    {
+        sendto(send_sock, buf, strlen(buf), 0, (struct sockaddr*)&broad_adr, sizeof(broad_adr));
+        sleep(2);
+    }
+    close(send_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+**`news_receiver_brd.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <errno.h>
+
+#define BUF_SIZE 1024
+void error_handling(char *message);
+
+int main(int argc, char* argv[])
+{
+    int recv_sock;
+    struct sockaddr_in adr;
+    int str_len;
+    char buf[BUF_SIZE];
+    struct timeval tv;
+    if(argc!=2)
+    {
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    recv_sock = socket(PF_INET, SOCK_DGRAM, 0);
+    memset(&adr, 0, sizeof(adr));
+    adr.sin_family = AF_INET;
+    adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(recv_sock, (struct sockaddr*)&adr, sizeof(adr)) == -1)
+        error_handling("bind() error!");
+
+    tv.tv_sec = 5;  // 5秒超时
+    tv.tv_usec = 0;
+    //如果在指定时间内没有收到数据，recvfrom将返回-1并设置errno为EAGAIN或EWOULDBLOCK
+    setsockopt(recv_sock, SOL_SOCKET, SO_RCVTIMEO, (void*)&tv, sizeof(tv));
+
+    while (1) {
+        str_len = recvfrom(recv_sock, buf, BUF_SIZE-1, 0, NULL, 0);
+        if(str_len < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("Receive timeout, exit normally\n");
+                break;
+            } else {
+                perror("recvfrom");
+            }
+        }
+        buf[str_len] = 0;
+        fputs(buf, stdout);
+    }
+    close(recv_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果:
+
+![](assets/image-sender_brd.png)
+
+![](assets/image-receiver_brd.png)
