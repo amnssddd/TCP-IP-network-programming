@@ -9168,3 +9168,373 @@ void error_handling(char* message)
 ![](assets/image-sender_brd.png)
 
 ![](assets/image-receiver_brd.png)
+
+
+## 15 套接字和标准I/O
+
+（从本章开始速度加快，不会向以往那样写一大堆）
+
+
+### 标准I/O函数的优点
+
+
+#### 标准 I/O 函数的两个优点
+
+下面列出标准 I/O 函数的两大优点。
+- 标准I/O函数具有良好的移植性
+- 标准I/O函数可以利用缓冲提高性能
+
+创建套接字时，操作系统将生成用于I/O的缓冲，此缓冲在执行TCP协议时发挥着非常重要的作用，此是若使用标准I/O函数，将得到额外的另一缓冲的支持，如图15-1所示。
+
+<img src="assets/image-15.1.png" width="60%" alt="15-1">
+
+从图15-1可以看出，使用标准I/O函数传输数据时，经过2个缓冲。例如，通过`fputs`函数传输字符串“Hello”时，首先将数据传递到标准I/O函数的缓冲，然后数据移动到套接字输出缓冲，最后将字符串发送到对方主机。数据经过两次缓冲后才能抵达对方主机，很明显会对性能产生影响。
+
+
+#### 标准 I/O 函数和系统函数之间的性能对比
+
+接下来分别利用**标准 I/O 函数(`fgets`、`fputs`)**和**系统函数(`read`、`write`)**编写文件复制程序，这主要是为了**检验缓冲提高性能的程度**。
+
+首先是利用**系统函数**复制文件的示例。
+
+**`syscpy.c`**
+
+``` c
+#include <stdio.h>
+#include <fcntl.h>
+#define BUF_SIZE 3   //用最短数据长度构成
+
+int main()
+{
+    int fd1, fd2;
+    int len;
+    char buf[BUF_SIZE];
+
+    fd1 = open("news.txt", O_RDONLY);
+    fd2 = open("cpy.txt", O_WRONLY|O_CREAT|O_TRUNC);
+
+    while ((len = read(fd1, buf, sizeof(buf))) > 0)
+    {
+        write(fd2, buf, len);
+    }
+    close(fd1);
+    close(fd2);
+    return 0;
+}
+```
+
+上述示例是基于`read`&`write`函数的文件复制程序，若使用**未提供缓冲**的系统函数传输数据，则需要花费很长时间。
+
+下面示例采用**标准 I/O 函数**复制文件。
+
+``` c
+#include <stdio.h>
+#define BUF_SIZE 3
+
+int main(int argc, char* argv[])
+{
+    FILE * fp1;  //保存在fp1中的是FILE结构体指针
+    FILE * fp2;  //保存在fp2中的是FILE结构体指针
+    char buf[BUF_SIZE];
+    
+    fp1 = fopen("news.txt", "r");
+    fp2 = fopen("cpy.txt", "w");
+
+    while (fgets(buf, BUF_SIZE, fp1) != NULL)
+    {
+        fputs(buf, fp2);
+    }
+    fclose(fp1);
+    fclose(fp2);
+    return 0;
+}
+```
+
+上述示例利用**基于缓冲**的`fputs`&`fgets`函数复制文件，在复制大文件时速度明显快于前者。
+
+
+#### 标准 I/O 函数的几个缺点
+
+当然，标准I/O函数同样有缺点，整理如下：
+- 不容易进行双向通信。
+- 有时可能频繁调用`fflush`函数。
+- 需要以`FILE`结构体指针的形式返回文件描述符。
+
+打开文件时，如果希望**同时进行读写操作**，则应以`r+、w+、a+`模式打开。但因为缓冲的缘故，每次切换读写工作状态时应调用`fflush`函数。这也会影响基于缓冲的性能提高。而且，为了使用标准I/O函数，需要`FILE`结构体指针。而创建套接字时默认返回文件描述符，因此**需要将文件描述符转化为`FILE`指针**。可以通过观察示例`syscpy.c`和`stdcpy.c`来加以区分。
+
+
+### 15.2 使用标准 I/O 函数
+
+如前所述，**创建套接字时返回文件描述符**，而为了使用标准 I/O 函数，只能将其**转换为`FILE`结构体指针**。先介绍其转换方法。
+
+
+#### 利用 fdopen 函数转换为 FILE 结构体指针
+
+``` c
+#include <stdio.h>
+
+FILE * fdopen(int fildes, const char * mode);
+//成功时返回转换的FILE结构体指针，失败时返回NULL
+```
+- `fildes` 需要转换的文件描述符。
+- `mode` 将要创建的FILE结构体指针的模式（mode）信息。
+
+上述函数的第二个参数与`fopen`函数中的打开模式相同。常用的参数有**读模式**“`r`”和**写模式**“`w`”。下面通过示例介绍该函数的使用方法。
+
+**`desto`**
+
+``` c
+#include <stdio.h>
+#include <fcntl.h>
+
+int main(void)
+{
+    FILE * fp;
+    int fd = open("data.dat", O_WRONLY|O_CREAT|O_TRUNC);  //使用open函数创建文件并返回文件描述符
+    if(fd == -1)
+    {
+        fputs("file open error", stdout);
+        return -1;
+    }
+
+    //调用fdopen函数将文件描述符转换为FILE指针。此时向第二个参数传递了“w”，因此返回写模式的FILE指针
+    fp = fdopen(fd, "w");
+    fputs("Network C programming \n", fp);
+    fclose(fp);  //利用FILE指针关闭文件
+    return 0;
+}
+```
+
+![](assets/image-desto.png)
+
+此示例中需要注意的是，文件描述符转换为`FILE`指针，并可以通过该指针调用标准I/O函数。
+
+
+#### 利用 fileno 函数转换为文件描述符
+
+接下来介绍与`fdopen`函数提供相反功能的函数，该函数在有些情况下非常有用。
+
+**`todes`**
+
+``` c
+#include <stdio.h>
+#include <fcntl.h>
+
+int main(void)
+{
+    FILE *fp;
+    int fd = open("data.dat", O_WRONLY|O_CREAT|O_TRUNC);
+    if(fd == -1)
+    {
+        fputs("flie open error", stdout);
+        return -1;
+    }
+
+    printf("First file descriptor: %d \n", fd);  //输出文件描述符整数值
+    fp = fdopen(fd, "w");  //调用fdopen函数将文件描述符转换为FILE指针
+    fputs("TCP/IP SOCKET PROGAMMING \n", fp);
+    printf("Second file descriptor: %d \n", fileno(fp));  //调用fileno函数再次转回文件描述符
+    fclose(fp);
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-todes.png)
+
+第14行和第17行输出的文件描述符相同，证明`fileno`函数**正确转换了文件描述符**。
+
+
+### 15.3 基于套接字的标准 I/O 函数使用
+
+前面介绍了标准I/O函数的优缺点，同时介绍了文件描述符转换为`FILE`指针的方法。下面将其适用于套接字。
+
+接下来将之前的回声服务器和客户端改为基于****的数据交换形式
+
+**`echo_stdserv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    char message[BUF_SIZE];
+    int str_len, i;
+
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t clnt_adr_sz;
+
+    if(argc != 2)
+    {
+        printf("Usage : %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(serv_sock == -1)
+        error_handling("socket() error!");
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    clnt_adr_sz = sizeof(clnt_adr);
+    for(i=0; i<5; i++)
+    {
+        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+        if(clnt_sock == -1)
+            error_handling("accept() error!");
+        else
+            printf("Connect client %d \n", i+1);
+
+        //此处开始修改
+        int read_fd = dup(clnt_sock);  // 复制文件描述符
+        int write_fd = dup(clnt_sock);
+        FILE *readfp = fdopen(read_fd, "r");    //读取流
+        FILE *writefp = fdopen(write_fd, "w");  //写入流
+        while (!feof(readfp))
+        {
+            fgets(message, BUF_SIZE, readfp);
+            fputs(message, writefp);
+            fflush(writefp);
+        }
+        fclose(readfp);
+        fclose(writefp);
+        /* 下面代码需省略，因为标准 I/O 库（FILE*）在关闭时（fclose）会自动关闭底层文件描述符。
+           fdopen() 会将 FILE* 和 clnt_sock 关联。关闭 FILE* 时，标准库会调用 close(fd) 释放资源。*/
+        //close(clnt_sock);
+    }
+    close(serv_sock);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+上述实例中需要注意的是while循环语句。调用基于字符串的`fgets`、`fputs`函数提供服务。标准I/O函数为了提高性能，**内部提供额外的缓冲**，所以调用`fflush`函数确保**立即将数据传输给客户端**。接下来给出回声客户端代码。
+
+**`echo_client.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    char message[BUF_SIZE];
+    int str_len;
+    struct sockaddr_in serv_adr;
+
+    if(argc != 3)
+    {
+        printf("Usage : %s <IP> <port>\n", argv[0]);
+        exit(1);
+    }
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(sock == -1)
+        error_handling("socket() error!");
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = inet_addr(argv[1]);
+    serv_adr.sin_port = htons(atoi(argv[2]));
+
+    if(connect(sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("connect() error!");
+    else
+        puts("connect...............");
+
+    // 使用 dup() 避免冲突
+    FILE *readfp = fdopen(dup(sock), "r");   //读取流
+    FILE *writefp = fdopen(dup(sock), "w");  //写入流
+    while (1)
+    {
+        fputs("Input message(Q to quit): ", stdout);
+        fgets(message, BUF_SIZE, stdin);
+
+        if(!strcmp(message,"q\n") || !strcmp(message,"Q\n"))
+            break;
+
+        fputs(message, writefp);
+        fflush(writefp);
+        fgets(message, BUF_SIZE, readfp);
+        printf("Message from server: %s", message);
+    }
+    fclose(writefp);
+    fclose(readfp);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+标准I/O的使用主要关键点在三个方面：**将文件描述符转为`FILE*`**、**`fgets`&`fputs`读写数据**和**关闭流（`fclose`）**。
+
+此处以`echo_client.c`为示例讲解
+
+(1) `fdopen()`：将文件描述符转换为 `FILE*`
+``` c
+FILE *readfp = fdopen(dup(sock), "r");  // 读取流
+FILE *writefp = fdopen(dup(sock), "w"); // 写入流
+```
+- 作用：将套接字文件描述符（sock）转换为标准 I/O 的 `FILE*` 流。
+- 为什么要用 `dup()`？
+  - 避免同一个文件描述符被多个 `FILE*` 流管理（否则关闭一个流会导致另一个流失效）。
+  - `dup(sock)` 会复制一个新的文件描述符，两个 `FILE*` 流各自管理独立的描述符。
+
+(2) `fgets()` 和 `fputs()`：读写数据
+``` c
+// 客户端发送数据
+fputs(message, writefp);
+fflush(writefp);  // 立即刷新缓冲区，确保数据发送
+
+// 客户端接收数据
+fgets(message, BUF_SIZE, readfp);
+```
+- `fputs`：写入字符串到流（自动处理 `\0` 结尾）。
+- `fgets`：从流中读取一行（直到遇到 `\n` 或缓冲区满）。
+- `fflush`：强制刷新缓冲区，确保数据立即发送（默认可能是行缓冲或全缓冲）。
+
+(3) `fclose()`：关闭流
+- 关闭 `FILE*` 流，并自动关闭底层文件描述符（由 `fdopen()` 关联的 `dup(sock)`）。
+- 无需手动 `close(sock)`，否则会导致重复关闭。
+
+运行结果与之前相同，故省略。第4章的回声服务器需要将接收的数据转换为字符串（数据尾部插入0），但上述示例中并没有这一过程。因为使用I/O标准函数后可以**按字符串单位进行数据交换**。
+
+

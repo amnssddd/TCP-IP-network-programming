@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
     clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr, &clnt_addr_size);
     if(clnt_sock == -1)
         error_handling("accept() error");
-
+    
     write(clnt_sock, message, sizeof(message));
     close(clnt_sock);
     close(serv_sock);
