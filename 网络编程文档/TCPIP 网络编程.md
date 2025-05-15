@@ -9538,3 +9538,325 @@ fgets(message, BUF_SIZE, readfp);
 运行结果与之前相同，故省略。第4章的回声服务器需要将接收的数据转换为字符串（数据尾部插入0），但上述示例中并没有这一过程。因为使用I/O标准函数后可以**按字符串单位进行数据交换**。
 
 
+## 16 关于 I/O 分流的其他内容
+
+### 16.1 分离 I/O 流
+
+
+#### 2次 I/O 流分离
+
+我们之前通过两种方式分离过I/O流，第一种是第10章“TCP I/O过程分离”。这种方式通过调用`fork`函数复制1个文件描述符，以区分输入和输出中使用的文件描述符。我们分开了2个文件描述符的用途，因此这也属于“流”的分离。
+
+第二种分离在15章。通过2次`fdopen`函数的调用，创建读模式`FILE`指针和写模式`FILE`指针。换言之此处分离了输入工具和输出工具，因此也可视为“流”的分离。
+
+
+#### “流”分离带来的 EOF 问题
+
+在第7章曾讲过调用`shutdown`函数的基于半关闭的EOF传递方法。但在流分离的情况下进行半关闭，则会有可能出现如下问题：
+
+“若**针对输出模式**的FILE指针调用fclose函数，这样可以向对方传递EOF，变成**可以接收数据但无法发送数据**的半关闭状态吗？”
+
+下面分别给出相应服务器端和客户端的代码。
+
+**`sep_serv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    char message[BUF_SIZE];
+    int str_len, i;
+
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t clnt_adr_sz;
+
+    if(argc != 2)
+    {
+        printf("Usage : %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(serv_sock == -1)
+        error_handling("socket() error!");
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    clnt_adr_sz = sizeof(clnt_adr);
+    clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+
+    int read_fd = dup(clnt_sock);  // 复制文件描述符
+    int write_fd = dup(clnt_sock);
+    FILE *readfp = fdopen(read_fd, "r");    //读取流
+    FILE *writefp = fdopen(write_fd, "w");  //写入流
+
+    fputs("FROM SERVER: Hi~ client? \n", writefp);
+    fputs("I love all of the world \n", writefp);
+    fputs("You are awesome \n", writefp);
+    fflush(writefp);  //向客户端发送字符串，调用fflush函数结束发送过程
+
+    fclose(writefp);  //详细解释在下
+    fgets(message, sizeof(message), readfp);
+    fputs(message, writefp);
+    fclose(readfp);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+针对**写模式**调用的`fclose`函数: `fclose(writefp)`
+
+调用`fclose`函数终止套接字时，对方主机将收到EOF，但还剩下读模式`FILE`指针`readfp`。这是否是正确的半关闭呢？
+
+**`sep_clnt.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    char message[BUF_SIZE];
+    int str_len;
+    struct sockaddr_in serv_adr;
+
+    if(argc != 3)
+    {
+        printf("Usage : %s <IP> <port>\n", argv[0]);
+        exit(1);
+    }
+
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(sock == -1)
+        error_handling("socket() error!");
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = inet_addr(argv[1]);
+    serv_adr.sin_port = htons(atoi(argv[2]));
+
+    connect(sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr));
+    int read_fp = dup(sock);
+    int write_fp = dup(sock);
+
+    FILE* readfp = fdopen(read_fp, "r");
+    FILE* writefp = fdopen(write_fp, "w");
+
+    while(1)
+    {
+        if(fgets(message, sizeof(message), readfp) == NULL)
+            break;
+        fputs(message, stdout);
+        fflush(stdout);
+    }
+
+    fputs("FROM CLIENT: Thank you! \n", writefp);
+    fflush(writefp);
+    fclose(writefp);
+    fclose(readfp);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果：
+
+![](assets/image-sep_clnt.png)
+
+观察运行结果可知，服务器端未能接收最后的字符串。`sep_serv.c`示例调用的`fclose`函数**完全终止了套接字**，而不是半关闭。以上就是需要通过本章解决的问题。半关闭在多种情况下都非常有用，各位必须能针对`fdopen`函数调用时生成的`FILE`指针进行半关闭操作。
+
+
+### 16.2 文件描述符的复制和半关闭
+
+#### 终止“流”时无法半关闭的原因
+
+图16-1描述的是`sep_serv.c`示例中的**2个`FILE`指针、文件描述符及套接字**之间的关系。
+
+<img src="assets/image-16.1.png" width="60%" alt="16-1">
+
+从图16-1可以看出，示例`sep_serv.c`中的**读模式`FILE`指针**和**写模式`FILE`指针**都是**基于同一文件描述符**创建的。因此，针对任意一个`FILE`指针调用`fclose`函数时都会关闭文件描述符，也就终止套接字，如图16-2所示。
+
+<img src="assets/image-16.2.png" width="60%" alt="16-2">
+
+从图16-2中可以看到，销毁套接字时再也无法进行数据交换。那如何进入可以输入但无法输出的**半关闭**状态呢？
+
+解决方法是，复制文件描述符后用`shutdown`函数进行半关闭。
+
+（由于在上章已用到相关知识，故在此大致叙述）
+
+
+#### dup & dup2
+
+下面给出文件描述符的复制方法，通过下列2个函数之一完成。
+
+``` c
+#include <unistd.h>
+
+int dup(int fildes);
+int dup2(int fildes, int fildes2);
+//成功时返回复制的文件描述符，失败时返回-1
+```
+- `fildes` 需要复制的文件描述符
+- `fileds2` 明确指定的文件描述符整数值
+
+`dup2`函数明确指定**复制的文件描述符整数值**。向其传递大于0且小于进程能生成的最大文件描述符值时，该值将成为复制出的文件描述符值。
+
+下面给出示例验证函数功能，示例将复制自动打开的标准输出的文件描述符1,并利用复制出的描述符进行输出。另外，自动打开的文件描述符0、1、2与套接字文件描述符没有区别，因此可以用来验证`dup`函数的功能。
+
+**`dup.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+
+int main(int argc, char* argv[])
+{
+    int cfd1, cfd2;
+    char str1[] = "HI~ \n";
+    char str2[] = "It's nice day \n";
+
+    cfd1 = dup(1);
+    cfd2 = dup2(cfd1, 7);
+
+    printf("fd1=%d, fd2=%d \n", cfd1, cfd2);
+    write(cfd1, str1, sizeof(str1));
+    write(cfd2, str2, sizeof(str2));
+
+    close(cfd1);
+    close(cfd2);
+    write(1, str1, sizeof(str1));
+    close(1);
+    write(1, str2, sizeof(str2));
+    return 0;
+}
+```
+
+运行结果：
+
+![](assets/image-dup.png)
+
+
+#### 复制文件描述符后“流”的分离
+
+现在修改`sep_serv.c`示例，使其能通过服务器端的半关闭状态接收客户端最后发送的字符串（由于已复制套接字，故将`fclose`函数修改为`shutdown`函数即可）。
+
+**`sep_serv2.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define BUF_SIZE 1024
+void error_handling(char* message);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    char message[BUF_SIZE];
+    int str_len, i;
+
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t clnt_adr_sz;
+
+    if(argc != 2)
+    {
+        printf("Usage : %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(serv_sock == -1)
+        error_handling("socket() error!");
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    clnt_adr_sz = sizeof(clnt_adr);
+    clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+
+    int read_fd = dup(clnt_sock);  // 复制文件描述符
+    int write_fd = dup(clnt_sock);
+    FILE *readfp = fdopen(read_fd, "r");    //读取流
+    FILE *writefp = fdopen(write_fd, "w");  //写入流
+
+    fputs("FROM SERVER: Hi~ client? \n", writefp);
+    fputs("I love all of the world \n", writefp);
+    fputs("You are awesome \n", writefp);
+    fflush(writefp);    //强制刷新缓冲区，确保数据立即发送给客户端。
+
+    //shutdown(SHUT_WR) 告诉 TCP 不再发送数据，但 fclose(writefp) 可以确保 FILE* 相关的资源被正确释放
+    shutdown(fileno(writefp), SHUT_WR);  //半关闭写入端，fileno()用于获取 FILE* 流对应的底层文件描述符（int fd）
+    fclose(writefp);                     //关闭写入流，但readfp仍能使用
+
+    fgets(message, sizeof(message), readfp);  //读取客户端发送的信息
+    fputs(message, stdout);                   //打印到终端
+    fclose(readfp);
+    return 0;
+}
+
+void error_handling(char* message)
+{
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+运行结果为收到客户端发送的信息，在此省略。
+
+
+## 17 优于 select 的 epoll
+
+### 17.1 epoll 理解及应用
+
