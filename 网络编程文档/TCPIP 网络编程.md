@@ -9860,3 +9860,363 @@ void error_handling(char* message)
 
 ### 17.1 epoll 理解及应用
 
+#### 基于 select 的 I/O 复用技术速度慢的原因
+
+第12章曾实现过基于`select`的I/O复用服务器端，很容易从代码上分析出不合理的设计，最主要两点如下：
+- 调用`select`函数后常见的针对所有文件描述符的循环语句
+- 每次调用`select`函数时都需要向该函数传递监视对象信息。
+
+调用`select`函数后，通过观察作为监视对象的`fd_set`变量的变化，并**找出发生变化的文件描述符**，因此无法避免针对所有监视对象的循环语句。且由于作为监视对象的`fd_set`变量会发生变化，所以调用`select`函数前应**复制并保存原有信息**，并在每次调用`select`函数时传递新的监视对象。
+
+虽然如此，由于 `epoll` 函数只在Linux下提供支持，所以在服务器端接入者少或程序兼容性高的情况下可使用`select`函数。
+
+
+#### 实现 epoll 时必要的函数和结构体
+
+能克服`select`函数缺点的`epoll`函数具有如下优点，这些优点正好与`select`函数缺点相反。
+- **无需**编写以监视状态变化为目的的**针对所有文件描述符**的循环语句。
+- 调用对应于`select`函数的`epoll_wait`函数时**无需每次传递监视对象信息**。
+
+下面介绍`epoll`服务器端实现中需要的3个函数。
+- `epoll_creat`：创建**保存**`epoll`文件描述符的空间。
+- `epoll_ctl`：向空间**注册并注销**文件描述符。
+- `epoll_wait`：与`select`函数类似，**等待文件描述符发生变化**。
+
+`select`方式中为了**保存**监视对象文件描述符，直接声明了`fd_set`变量。但`epoll`方式下由**操作系统**负责保存监视对象文件描述符，因此需要**向操作系统请求创建保存文件描述符的空间**，此时使用的函数就是`epoll_creat`。
+
+此外，为了**添加和删除**监视对象文件描述符，`select`方式中需要`FD_SET、FD_CLR`函数。但在`epoll`方式中，通过`epoll_ctl`函数请求操作系统完成。
+
+最后，`select`方式下调用`select`函数等待文件描述符的**变化**，而`epoll`中调用`epoll_wait`函数。
+
+`select`函数通过`fd_set`变量查看监视对象的状态变化，而`epoll`方式通过结构体`epoll_event`将发生变化（发生事件）的文件描述符单独集中到一起。
+
+``` c
+struct epoll_event
+{
+    __unt32_t events;
+    epoll_data_t data;    
+}
+
+typedef union epoll_data
+{
+    void * ptr;
+    int fd;
+    __uint32_t u32;
+    __uint64_t u64
+} epoll_data_t;
+```
+
+声明足够大的`epoll_event`结构体数组后，传递给`epoll_wait`函数时，**发生变化的文件描述符信息**将被填入该数组。因此，无需像`select`函数那样针对所有文件描述符进行循环。
+
+
+#### epoll_create
+
+下面给出 `epoll_create` 函数。
+``` c
+#include <sys/epoll.h>
+
+int epoll_create(int size);
+//成功时返回epoll文件描述符，失败时返回-1
+```
+- `size` `epoll`示例的大小
+
+调用`epoll_create`函数时创建的**文件描述符保存空间**称为“epoll例程”（有些情况下名称不同）。通过参数`size`传递的值决定`epoll`历程的大小，但该值只是向操作系统提的建议。换言之，**`size`并非用来决定`epoll`例程的大小`**，而是仅供操作系统参考。
+
+`epoll_ctl`
+
+生成`epoll`例程后，应**在其内部注册**监视对象文件描述符，此时使用`epoll_ctl`函数。
+
+``` c
+#include <sys.epoll.h>
+
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event * event);
+//成功时返回0,失败时返回-1
+```
+- `epfd` 用于注册监视对象`epoll`例程的文件描述符。
+- `op` 用于指定监视对象的添加、删除或更改等操作。
+- `fd` 需要注册的监视对象文件描述符。
+- `event` 监视对象的事件类型。
+
+与其他`epoll`函数相比，该函数多少有些复杂，但通过调用语句就很容易理解。假设按照如下形式调用`epoll_ctl`函数：
+
+`epoll_ctl(A, EPOLL_CTL_ADD, B, C);`
+
+第二个参数`EPOLL_CTL_ADD`意味着“**添加**”，因此上述语句有如下含义：
+
+“epoll例程A中注册文件描述符B，主要目的是监视参数C中的事件”
+
+再介绍一个调用语句。
+
+`epoll_ctl(A, EPOLL_CTL_DEL, B, NULL);`
+
+上述第二个参数`EPOLL_CTL_DEL`指“删除”，因此该语句具有如下含义：
+
+“从`epoll`例程A中删除文件描述符B”
+
+从上述调用语句中可以看到，从监视对象中删除时，不需要监视类型（事件信息），因此向第四个参数传递`NULL`。接下来介绍可以向`epoll_ctl`第二个参数传递的常量及含义。
+- `EPOLL_CTL_ADD`：将文件描述符注册到`epoll`例程。
+- `EPOLL_CTL_DEL`：从`epoll`例程中删除文件描述符。
+- `EPOLL_CTL_MOD`：更改注册的文件描述符的关注事件发生情况。
+
+下面介绍`epoll_ctl`函数的第四个参数，其类型是 **`epoll_event`结构体指针**。
+
+`epoll_event`结构体用于**保存发生事件的文件描述符集合**。但也可以在`epoll`例程中注册文件描述符时，用于**注册关注的事件**。下面通过调用语句说明该结构体在`epoll_ctl`函数中的应用。
+
+``` c
+struct epoll_event event;
+. . . . .
+event.events = EPOLLIN;  //发生需要读取数据的情况（事件）时
+event.data.fd = sockfd;
+epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &event);
+. . . . .
+
+```
+
+上述代码将`sockfd`注册到`epoll`例程`epfd`中，并在需要读取数据的情况下产生相应事件。接下来给出`epoll_event`的成员`events`中可以保存的常量及所指的事件类型。
+- `EPOLLIN`：需要读取数据的情况。
+- `EPOLLOUT`：输出缓冲为空，可以立即发送数据的情况。
+- `EPOLLPRI`：受到OOB数据的情况。
+- `EPOLLRDHUP`：断开连接或半关闭的情况，这在边缘触发方式下非常有用
+- `EPOLLERR`：发生错误的情况。
+- `EPOLLET`：以边缘触发的方式得到事件通知
+- `EPOLLONESHOT`：发生一次事件后，相应文件描述符不再收到事件通知。因此需要向`epoll_ctl`函数的第二个参数传递`EPOLL_CTL_MOD`，再次设置事件。
+
+可以通过**位或运算**同时传递多个上述参数。
+
+
+#### epoll_wait
+
+最后介绍与`select`函数对应的`epoll_wait`函数，`epoll`相关函数中默认**最后**调用该函数。
+
+```c
+#include <stdio.h>
+
+int epoll_wait(int epfd, struct epoll_event * events, int maxevents, int timeout);
+//成功时返回发生事件的文件描述符数，失败时返回-1
+```
+- `epfd` 表示事件发生监视范围的`epoll`例程的文件描述符。
+- `events` 保存发生事件的文件描述符集合的结构体地址值。
+- `maxevents` 第二个参数中可以保存的最大事件数。
+- `timeout` 以ms为单位的等待时间，传递-1时，一直等待直到发生事件。
+
+该函数调用方式如下。需注意的是，**第二个参数所指缓冲需要动态分配**。
+
+``` c
+int event_cnt;
+struct epoll_event * ep_events;
+. . . . .
+ep_events = malloc(sizeof(struct epoll_event)*EPOLL_SIZE);  //EPOLL_SIZE是宏常量
+. . . . .
+event_cnt = epoll_wait(epfd, ep_events, EPLL_SIZE, -1);
+. . . . .
+```
+
+调用函数后，返回**发生事件的文件描述符数**，同时在**第二个参数**指向的缓冲中保存**发生事件的文件描述符集合**。因此，无需像`select`函数那样插入针对所有文件描述符的循环。
+
+
+#### 基于 epoll 的回声服务器端
+
+接下来给出基于`epoll`的回声服务器端示例。
+
+**`echo_epollserv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/epoll.h>
+
+#define BUF_SIZE 100
+#define EPOLL_SIZE 50
+void error_handling(char *buf);
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t adr_sz;
+    int str_len, i;
+    char buf[BUF_SIZE];
+
+    struct epoll_event *epoll_events;
+    struct epoll_event event;
+    int epfd, event_cnt;
+
+    if(argc!=2){
+        printf("Usage: %s <port> \n", argv[0]);
+        exit(1);
+    }
+
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    epfd = epoll_create(EPOLL_SIZE);  //创建一个 epoll 实例，返回一个文件描述符（后续操作都需要epfd）
+    epoll_events = malloc(sizeof(struct epoll_event)*EPOLL_SIZE);
+
+    //向 epoll 实例注册、修改或删除文件描述符的监听事件
+    event.events = EPOLLIN;
+    event.data.fd = serv_sock;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, serv_sock, &event);
+
+    while(1)
+    {
+        //等待 epoll 实例上的 I/O 事件，返回就绪的事件数量
+        event_cnt = epoll_wait(epfd, epoll_events, EPOLL_SIZE, -1);
+        if(event_cnt == -1)
+        {
+            puts("epoll_wait() error!");
+            break;
+        }
+
+        for(i=0; i<event_cnt; i++)
+        {
+            if(epoll_events[i].data.fd == serv_sock)  //新连接处理
+            {
+                adr_sz = sizeof(clnt_adr);
+                clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &adr_sz);
+                event.events = EPOLLIN;
+                event.data.fd = clnt_sock;
+                epoll_ctl(epfd, EPOLL_CTL_ADD, clnt_sock, &event);
+            }
+            else  //客户端数据读写处理
+            {
+                str_len = read(epoll_events[i].data.fd, buf, BUF_SIZE);
+                if(str_len == 0)  //close request!
+                {
+                    epoll_ctl(epfd, EPOLL_CTL_DEL, epoll_events[i].data.fd, NULL);
+                    close(epoll_events[i].data.fd);
+                    printf("close client: %d \n", epoll_events[i].data.fd);
+                }
+                else
+                {
+                    write(epoll_events[i].data.fd, buf, str_len);  //echo!
+                }
+            }
+        }
+    }
+    close(serv_sock);
+    close(epfd);
+    return 0;
+}
+
+void error_handling(char *buf)
+{
+    fputs(buf, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+**事件处理逻辑详解**
+
+在 `epoll` 服务器中，事件处理是核心部分，主要分为**新连接处理**和**客户端数据读写处理**。
+
+1. **`epoll_wait` 等待事件**
+``` c
+event_cnt = epoll_wait(epfd, epoll_events, EPOLL_SIZE, -1);
+```
+- 作用：阻塞等待，直到至少有一个 I/O 事件发生（如新连接、数据到达）。
+- 返回值 `event_cnt`：就绪的事件数量。
+- `epoll_events` 数组：**存储所有就绪的事件信息**。
+
+2. **遍历所有就绪事件**
+``` c
+for (i = 0; i < event_cnt; i++) {
+    if (epoll_events[i].data.fd == serv_sock) {
+        // 处理新连接
+    } else {
+        // 处理客户端数据
+    }
+}
+```
+- `epoll_events[i].data.fd`：获取触发事件的文件描述符（fd）。
+- 判断条件：
+  - 如果是 `serv_sock`：说明**有新的客户端连接请求**。
+  - 否则：说明某个已连接的客户端**发送了数据或关闭连接**。
+
+3. **处理新连接（`serv_sock`可读）**
+``` c
+if (epoll_events[i].data.fd == serv_sock) {
+    adr_sz = sizeof(clnt_adr);
+    clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &adr_sz);
+    event.events = EPOLLIN;      // 监听可读事件
+    event.data.fd = clnt_sock;   // 关联客户端 socket
+    epoll_ctl(epfd, EPOLL_CTL_ADD, clnt_sock, &event);
+}
+```
+- `accept()`：
+  - 接受新连接，返回客户端 `socket（clnt_sock）`。
+  - `clnt_adr` 存储客户端地址信息（IP + 端口）。
+- `epoll_ctl(EPOLL_CTL_ADD)`：
+  - 将新客户端 `socket` 加入 `epoll` 监听列表，监听 `EPOLLIN`（可读事件）。
+- 后续：
+  - 该客户端 `socket` 后续的数据到达会触发 `epoll_wait` 返回。
+
+4. **处理客户端数据（已连接 socket 可读）**
+``` c
+else {
+    str_len = read(epoll_events[i].data.fd, buf, BUF_SIZE);
+    if (str_len == 0) {  // 客户端关闭连接
+        epoll_ctl(epfd, EPOLL_CTL_DEL, epoll_events[i].data.fd, NULL);
+        close(epoll_events[i].data.fd);
+        printf("close client: %d \n", epoll_events[i].data.fd);
+    } else {  // 回显数据
+        write(epoll_events[i].data.fd, buf, str_len);
+    }
+}
+```
+- `read()`：从客户端 `socket` 读取数据，存储到 `buf`。
+  - 返回值 `str_len` 大于0则返回成功读取的字节数，等于0则表示客户端主动关闭连接。
+- 客户端关闭连接
+  - `epoll_ctl(EPOLL_CTL_DEL)`：从 `epoll` 监听列表移除该 `socket`。
+  - `close(fd)`：关闭客户端 `socket`，释放资源。
+- 回显数据（`strlen > 0`）
+  - `write(fd, buf, str_len)`：将收到的数据原样回传给客户端（Echo 服务）。
+
+
+### 17.2 条件触发和边缘触发
+
+学习`epoll`时要学会正确区分**条件触发**（Level Trigger）和**边缘触发**(Edge Trigger)，这样才算是真正掌握该函数。
+
+**条件触发**方式中，只要输入缓冲中有数据就会一直通知该事件。
+
+**边缘触发**方式中，输入缓冲收到数据时仅注册1次该事件。
+
+
+#### 掌握条件触发的事件特型
+
+接下来通过代码了解条件触发的事件注册方式，下列代码是稍微修改之前的`echo_epollserv.c`示例得到的。`epoll`默认以**条件触发方式**工作，因此可以通过该示例验证条件触发的特性。
+
+**`echo_EPLTserv.c`**
+
+由于篇幅原因省略，上述示例与之前的`echo_epollsercv.c`之间的差异如下：
+- 将调用`read`函数时使用的缓冲大小缩减为4个字节
+``` c
+#define BUF_SIZE 4
+```
+- 插入验证`epoll_wait`函数调用次数的语句
+``` c
+while(1)
+{
+    event_cnt = epoll_wait(epfd, epoll_events, EPOLL_SIZE, -1);
+    . . . . .
+    puts("return epoll_wait");
+    . . . . .
+}
+```
+
+**减少缓冲大小**是为了**阻止服务器端一次性读取接收的数据**。换言之，调用`read`函数后，输入缓冲中仍有数据需要读取。而且会因此注册新的事件并从`epoll_wait`函数返回时将输出`return epoll_wait`字符串。运行结果如下。
+
+![](assets/image-EPserv.png)
+
