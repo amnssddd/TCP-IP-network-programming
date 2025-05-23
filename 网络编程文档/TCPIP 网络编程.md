@@ -10220,3 +10220,191 @@ while(1)
 
 ![](assets/image-EPserv.png)
 
+从运行结果可以看出，每当收到客户端数据时，都会注册该事件，并因此多次调用`epoll_wait`函数。
+
+
+#### 边缘触发的服务器端实现中必知的两点
+
+下面讲解边缘触发服务器端的实现方法。在此之前需说明两点必知内容。
+
+- 通过`errno`变量验证错误原因。
+- 为了完成非阻塞（Non-blocking）I/O，更改套接字特性。
+
+Linux的套接字相关函数一般通过返回-1通知发生了错误。虽然知道发生了错误，但仅凭这些内容无法得知产生错误的原因。因此为了在发生时**提供额外的信息**，Linux声明了全局变量（`int errno`）。
+
+为了访问该变量，需要引入`error.h`头文件，因为此头文件中有上述变量的`extern`声明。另外，每种函数发生错误时，保存到`errno`变量中的值都不同。在该章中只需注意如下类型的错误：`read`函数发现**输入缓冲没有数据可读**时返回-1,同时在`errno`中保存`EAGAIN`常量。
+
+稍后通过实例给出`errno`的使用方法。下面讲解**将套接字改为非阻塞方式**的方法。Linux提供更改或读取文件属性的如下方法（曾在13章中的`oob_recv.c`示例使用过）。
+
+``` c
+#include <fcntl.h>
+
+int fcntl(int filedes, int cmd, . . . );
+//成功时返回cmd参数相关值，失败时返回-1
+```
+- `fileds` 属性更改目标的文件描述符
+- `cmd` 表示函数调用的目的
+
+从上述声明中可以看出，`fcntl`具有**可变参数**的形式。如果向第二个参数传递`F_GETFL`，可以获得第一个参数所指的文件描述符属性（int 型）。反之，如果传递`F_SETFL`，可以更改文件描述符属性。若希望将文件（套接字）改为**非阻塞模式**，需要如下两条语句：
+
+``` c
+int flag = fcntl(fd, F_GETFL,0);
+fcntl(fd, F_SETFL, flag|O_NONBLOCK);
+```
+
+通过第一条语句**获取之前设置的属性信息**，通过第二条语句在此基础上**添加非阻塞`O_NONBLOCK`标志**。调用`read`&`write`函数时，无论是否存在数据，都会形成非阻塞文件（套接字）。
+
+
+#### 实现边缘触发的回声服务器端
+
+之所以介绍读取错误原因的方法和非阻塞模式的套接字创建方法，原因在于二者都与**边缘触发的服务器端实现**有密切联系。
+
+由于边缘触发方式中，**接收数据时仅注册1次该事件**。所以当`read`函数返回-1,变量`errno`中的值为`EAGAIN`时，说明**没有数据可读**。又因为边缘触发方式下以阻塞方式工作的`read`&`write`函数有可能会引起服务器端的长时间停顿，因此边缘触发方式中一定要采用**非阻塞**`read`&`write`函数。
+
+接下来给出以边缘触发方式工作的回声服务器端示例。
+
+**`echo_EPETserv.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define BUF_SIZE 4
+#define EPOLL_SIZE 50
+void setnonblockingmode(int fd);
+void error_handling(char *buf);
+
+int main(int argc, char *argv[])
+{
+    int serv_sock, clnt_sock;
+    struct sockaddr_in serv_adr, clnt_adr;
+    socklen_t adr_sz;
+    int str_len, i;
+    char buf[BUF_SIZE];
+
+    struct epoll_event *ep_events;
+    struct epoll_event event;
+    int epfd, event_cnt;
+    if(argc!=2)
+    {
+        printf("Usage: %s <port>", argv[0]);
+        exit(1);
+    }
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+    if(bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        error_handling("bind() error!");
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    epfd = epoll_create(EPOLL_SIZE);
+    ep_events = malloc(sizeof(struct epoll_event)*EPOLL_SIZE);
+
+    setnonblockingmode(serv_sock);
+    event.events = EPOLLIN;
+    event.data.fd = serv_sock;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, serv_sock, &event);
+
+    while(1)
+    {
+        event_cnt = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
+        if(event_cnt == -1)
+        {
+            puts("epoll_wait() error!");
+            break;
+        }
+
+        puts("return epoll_wait");
+        for(i=0; i<event_cnt; i++)
+        {
+            if(ep_events[i].data.fd == serv_sock)
+            {
+                adr_sz = sizeof(clnt_adr);
+                clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_sock, &adr_sz);
+                setnonblockingmode(clnt_sock);
+                event.events = EPOLLIN|EPOLLET;  //将套接字事件注册方式改为边缘触发
+                event.data.fd = clnt_sock;
+                epoll_ctl(epfd, EPOLL_CTL_ADD, clnt_sock, &event);
+                printf("connected client: %d \n", clnt_sock);
+            }
+            else  // 处理客户端套接字事件
+            {
+                char accumulated_buf[BUF_SIZE * 256]; // 临时累积缓冲区
+                int acc_len = 0;                     // 已累积数据长度
+                
+                //边缘触发必须用while循环直到EGAIN，否则会丢失数据
+                while(1)
+                {
+                    str_len = read(ep_events[i].data.fd, buf, BUF_SIZE);
+                    if(str_len == 0)  // 客户端关闭连接
+                    {
+                        epoll_ctl(epfd, EPOLL_CTL_DEL, ep_events[i].data.fd, NULL);
+                        close(ep_events[i].data.fd);
+                        printf("close client: %d \n", ep_events[i].data.fd);
+                        break;
+                    }
+                    else if(str_len < 0)  //读取错误（需要发送累积的未完成消息）
+                    {
+                        if(errno == EAGAIN)  // 数据已读完（内核缓冲区已空）
+                        {
+                            //将累积的完整消息回显（发送残留数据）
+                            if(acc_len > 0)  
+                            {
+                                write(ep_events[i].data.fd, accumulated_buf, acc_len);
+                                acc_len = 0;
+                            }
+                            break;
+                        }
+                    }
+                    else  // 成功读取数据
+                    {
+                        // 将新数据追加到累积缓冲区
+                        memcpy(accumulated_buf + acc_len, buf, str_len);
+                        acc_len += str_len;
+                        
+                        // 检测消息结束符（根据协议决定，这里假设换行符结尾）
+                        if(acc_len > 0 && accumulated_buf[acc_len-1] == '\n')
+                        {
+                            write(ep_events[i].data.fd, accumulated_buf, acc_len);
+                            acc_len = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    close(serv_sock);
+    close(epfd);
+    return 0;
+}
+
+//将文件（套接字）改为非阻塞形式
+void setnonblockingmode(int fd)
+{
+    int flag = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flag|O_NONBLOCK);
+}
+
+void error_handling(char *buf)
+{
+    fputs(buf, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+```
+
+![](assets/image-EPETserv.png)
+
+![](assets/image-EPETclient.png)
+
+上述运行结果需要注意的是，客户端发送消息次数和服务器端`epoll_wait`函数调用次数相同。客户端从请求连接到断开连接共发送5次数据，服务器端也相应产生5个事件。
