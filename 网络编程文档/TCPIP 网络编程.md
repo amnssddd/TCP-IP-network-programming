@@ -10342,7 +10342,7 @@ int main(int argc, char *argv[])
                 char accumulated_buf[BUF_SIZE * 256]; // 临时累积缓冲区
                 int acc_len = 0;                     // 已累积数据长度
                 
-                //边缘触发必须用while循环直到EGAIN，否则会丢失数据
+                //边缘触发必须用while循环直到EAGAIN，否则会丢失数据
                 while(1)
                 {
                     str_len = read(ep_events[i].data.fd, buf, BUF_SIZE);
@@ -10408,3 +10408,672 @@ void error_handling(char *buf)
 ![](assets/image-EPETclient.png)
 
 上述运行结果需要注意的是，客户端发送消息次数和服务器端`epoll_wait`函数调用次数相同。客户端从请求连接到断开连接共发送5次数据，服务器端也相应产生5个事件。
+
+
+#### 条件触发和边缘触发的优劣
+
+边缘触发可以**分离接收数据和处理数据的时间点**。现给出如下情景帮助理解，如图17-1所示。
+
+<img src="assets/image-17.1.png" width="40%" alt="17-1">
+
+图17-1运行流程如下：
+- 服务器端分别从客户端A、B、C接收数据。
+- 服务器端按照A、B、C的顺序重新组合收到的数据。
+- 组合的数据将发送给任意主机。
+
+为了完成该过程，若能按所设想的流程运行程序，服务器端的实现并不难，但现实中可能频繁出现各种情况导致错误。
+
+因此，即使输入缓冲收到数据（注册相应事件），服务器端也能**决定读取和处理这些数据的时间点**，这样就给服务器端的实现带来巨大的灵活性。条件触发和边缘触发的区别主要从服务器端实现模型的角度谈论，在该角度看，边缘触发更有可能带来高性能。
+
+
+## 18 理解线程的概念
+
+### 18.1 理解线程的概念
+
+#### 引入线程的背景
+
+第10章介绍了**多进程服务器端**的实现方法。多进程模型与`select`或`epoll`相比的确有自身的优点，但同时也有问题。如前所述，创建进程（复制）的工作本身会给操作系统带来相当沉重的负担。而且，每个进程都具有独立的内存空间，所以进程间通信的实现难度也会随之提高。换言之，多进程模型的缺点可概括如下：
+- 创建进程的过程会带来一定的开销
+- 为了完成进程间数据交换。需要特殊的IPC技术（进程间通信）。
+
+相比于上述两个缺点，最大的缺点是为了分时使CPU，需要“上下文切换”过程。下面介绍该概念。
+
+运行程序前需要**将相应进程信息读入内存**，如果运行进程A后需要紧接着运行进程B，就应该将进程A相关信息移出内存，并读入进程B相关信息。这就算**上下文切换**。但此时进程A的数据将被移动到硬盘，所以上下文切换需要很长时间。即使通过优化加快速度，也会存在一定局限。
+
+为了保存多进程的优点，同时一定程度上克服该缺点，引入**线程**（Thread）。线程相比进程有如下优点：
+
+- 线程的创建和上下文切换比进程的快。
+- 现场间交换数据时无需特殊技术。
+
+
+#### 线程和进程的差异
+
+每个进程的内存空间都由保存全局变量的“**数据区**”、向`malloc`等函数的动态分配提供空间的**堆**（Heap）、函数运行时使用的**栈**（Stack）构成。每个进程都拥有这种独立空间，多个进程的内存结构如图18-1所示。
+
+<img src="assets/image-18.1.png" width="40%" alt="18-1">
+
+若以**获得多个代码执行流**为主要目的，则不应该像图18-1那样完全分离内存结构，而只需**分离栈区域**。通过这种方式可以获得如下优势：
+
+- 上下文切换时**不需要切换数据区和堆**。
+- 可以**利用数据区和堆交换数据**。
+
+线程为了保持多条代码执行流而**隔开了栈区域**，因此具有如图18-2所示的内存结构。
+
+<img src="assets/image-18.2.png" width="40%" alt="18-2">
+
+如18-2所示，**多个线程将共享数据区和堆**。为了保持这种结构,线程将在进程内创建并运行。
+
+
+### 18.2 线程创建及运行
+
+#### 线程的创建和执行流程
+
+线程具有单独的执行流，因此需要单独的定义线程的main函数，还需要请求操作系统在单独的执行流中执行该函数，完成该功能的函数如下：
+
+``` c
+#include <pthread.h>
+
+int phread_create(
+    phread_t * restrict thread, const phread_attr_t restrict attr,
+    void * (* start_routine)(void *), void * restruct arg
+);
+//成功时返回0, 失败时返回其他值
+```
+- `thread` 保存新创建线程ID的变量地址值。线程与进程相同，也需要用于区分不同线程的ID。
+- `attr` 用于传递线程属性的参数。传递`NULL`时，创建默认属性的线程。
+- `start_routine` 相当于线程main函数的在单独执行流中执行的函数地址值（函数指针）。
+- `arg` 通过第三个参数传递调用函数时包含传递参数信息的变量地址值。
+
+要想理解好上述函数的参数，需要熟练掌握`restrict`关键字和函数指针相关语法。下面通过示例了解该函数的功能。
+
+**`thread1.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <pthread.h>
+void* thread_main(void *arg);
+
+int main(int argc, char *argv[])
+{
+    pthread_t t_id;
+    int thread_param = 5;
+
+    /* 请求创建一个线程，从thread_main函数调用开始，在单独的执行流中运行。
+       同时在调用thread_main函数时向其传递thread_param变量的地址值 */
+    if(pthread_create(&t_id, NULL, thread_main, (void*)&thread_param) != 0)
+    {
+        puts("ptread_creat() error!");
+        return -1;
+    }
+    sleep(10);
+    puts("ends of main");
+    return 0;
+}
+
+//该函数参数为pthread_create函数的第四个参数 (void*)&thread_param
+void* thread_main(void *arg)
+{
+    int i;
+    int cnt = *((int*)arg);
+    for(i=0; i<cnt; i++)
+    {
+        sleep(1);
+        puts("running thread");
+    }
+    return NULL;
+}
+```
+
+![](assets/image-tr1.png)
+
+从上述运行结果可以看出，线程相关代码在编译时需要添加 -lpthread 选项声明需要**连接线程库**，只有这样才能调用头文件`phread.h`中声明的函数。上述程序的执行流程如图18-4所示。
+
+<img src="assets/image-18.4.png" width="40%" alt="18-4">
+
+图18-4中的虚线代表执行流称，向下的箭头指的是执行流，横向箭头是函数调用。
+
+若将main函数中的`sleep(10)`改为`sleep(2)`，则在运行后可以看到不会输出5次“running thread”字符串。因为main函数返回后**整个进程将被销毁**，如图18-5所示。
+
+<img src="assets/image-18.5.png" width="40%" alt="18-5">
+
+正因如此，在之前的示例中通过调用`sleep`函数向线程提供了充足的执行空间。实际上在正常编写代码时不会用到`sleep`函数控制线程执行。因为这相当于预测程序的执行流程，且稍有不慎就可能干扰程序的正常执行流。因此，我们通常利用下面的函数**控制线程的执行流**。通过下列函数可以更有效地解决现讨论的问题，还可同时了解线程ID的用法。
+
+``` c
+#include <pthread.h>
+
+int pthread_join(pthread_t thread, void ** status);
+//成功时返回0,失败时返回其他值
+```
+- `thread` 该参数值ID的线程终止后才会从该函数返回。
+- `status` 保存线程的main函数返回值的指针变量地址值。
+
+简言之，**调用该函数的进程（或线程）将进入等待状态，直到第一个参数为ID的线程终止为止**。而且可以得到线程的main函数返回值，所以该函数比较有用。下面通过示例了解该函数的功能。
+
+**`thread2.c`**
+
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+void* thread_main(void *arg);
+
+int main(int argc, char* argv[])
+{
+    pthread_t t_id;
+    int thread_param = 5;
+    void * thr_ret;
+
+    if(pthread_create(&t_id, NULL, thread_main, (void*)&thread_param) != 0)
+    {
+        puts("pthread_creat() error!");
+        return -1;
+    }
+
+    //main函数将等待ID保存在t_id变量中的线程终止
+    if(pthread_join(t_id, &thr_ret) != 0)
+    {
+        puts("pthread_join() error!");
+        return -1;
+    }
+
+    printf("Thread return message: %s \n", (char*)thr_ret);
+    free(thr_ret);
+    return 0;
+}
+
+void* thread_main(void *arg)
+{
+    int i;
+    int cnt = *((int*)arg);
+    char * msg = (char *)malloc(sizeof(char)*50);
+    strcpy(msg, "Hello, I am thread~ \n");
+
+    for(i=0; i<cnt; i++)
+    {
+        sleep(1);
+        puts("running thread");
+    }
+    
+    //此处的返回值返回到pthread_join函数第二个参数thr_ret
+    return (void*)msg;  
+}
+```
+
+![](assets/image-tr2.png)
+
+该示例执行流程图如图18-6所示，可观察程序暂停后从线程终止时（线程函数返回时）重新执行的部分。
+
+<img src="assets/image-18.6.png" width="40%" alt="18-6">
+
+
+#### 可在临界区内调用的函数
+
+之前示例中只创建了1个线程，接下来的示例将开始创建多个线程。创建线程的方法没有区别，但多个线程同时调用函数时可能会产生错误。这类函数内部存在临界区（Critical Section），也就是说多个线程同时执行这部分代码时可能会引起问题。临界区中至少存在1条这类代码。
+
+稍后讨论具体问题，现只需要理解临界区概念即可。根据临界区是否引起问题，函数可分为以下2类：
+- 线程安全函数（Thread-safe function）
+- 非线程安全函数（Thread-safe function）
+
+线程安全函数被多个线程同时调用也不会引发问题。反之，非线程安全函数被同时调用时会引发问题。但这并不代表线程安全函数不存在临界区，只是因为被多个线程调用时可通过一些措施避免问题。
+
+平台在定义非线程安全函数的同时，也提供了具有相同功能的线程安全的函数。**线程安全函数的名称后缀**通常为`_r`。不仅如此，可以**声明头文件前定义`_REENTRANT`宏**，将非线程安全函数转为相同功能的线程安全的函数。如下所示。
+
+`root@my_linux:/tcpip# gcc -D_REENTRANT mythread.c -o mthread -lpthread`
+
+
+#### 工作（Worker）线程模型
+
+将要介绍的示例将计算1到10的和，但并不算在main函数进行累加计算，而是创建2个线程，其中一个线程计算1到5的和，另一个线程计算6到10的和，main函数只负责输出运算结果。这种方式的编程模型称为“工作线程（Worker thread）模型”。计算1到5之和的线程与计算6到10之和的线程将成为main线程管理的工作（Worker）。最后给出程序执行流程图，如图18-7所示。
+
+<img src="assets/image-18.7.png" width="40%" alt="18-7">
+
+接下来给出示例代码。
+
+**`thread3.c`**
+
+``` c
+#include <stdio.h>
+#include <pthread.h>
+void * thread_sumation(void* arg);
+int sum = 0;
+
+int main()
+{
+    pthread_t id_t1, id_t2;
+    int range1[] = {1, 5};
+    int range2[] = {6, 10};
+
+    pthread_create(&id_t1, NULL, thread_sumation, (void*)range1);
+    pthread_create(&id_t2, NULL, thread_sumation, (void*)range2);
+
+    pthread_join(id_t1, NULL);
+    pthread_join(id_t2, NULL);
+
+    printf("result: %d \n", sum);
+    return 0;
+}
+
+void * thread_sumation(void* arg)
+{
+    int start = ((int*)arg)[0];
+    int end = ((int*)arg)[1];
+
+    while (start <= end)
+    {
+        sum+=start;
+        start++;
+    }
+    return NULL;
+}
+```
+
+![](assets/image-tr3.png)
+
+**为什么是`((int*)arg)[0]`：**
+
+**`((int*)arg)[0]`的解析：**
+- `arg`是`void*`类型
+- `(int*)arg`将`void*`强制转换为`int*`（指向整数的指针）
+- `[0]`然后访问这个指针指向的第一个整数
+
+**错误用法**：
+- `int* arg[0]`：这是一个声明，表示"一个长度为0的数组，数组元素是 `int*` 类型"
+- `(int*)arg[0]`：先计算 `arg[0]`，再对 `arg[0]` 强制转换为 `int*` 类型
+
+需要注意的是，**两个线程直接访问全局变量`sum`**。运行结果虽然正确，但存在临界区相关问题，因此再介绍另一示例。该示例与上述示例相似，只是增加了发生临界区相关错误的可能性，即使在高配置系统环境下也容易验证产生的错误。
+
+**`thread4.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <pthread.h>
+#define NUM_THREAD 100
+
+void * thread_inc(void* arg);
+void * thread_des(void* arg);
+long long num = 0;
+
+int main(int argc, char* argv[])
+{
+    pthread_t thread_id[NUM_THREAD];
+    int i;
+
+    printf("sizeof long long: %ld \n", sizeof(long long)); //查看long long的大小
+    for(i=0; i<NUM_THREAD; i++)
+    {
+        if(i%2)
+            pthread_create(&thread_id[i], NULL, thread_inc, NULL);
+        else
+            pthread_create(&thread_id[i], NULL, thread_des, NULL);
+    }
+    for(i=0; i<NUM_THREAD; i++)
+        pthread_join(thread_id[i], NULL);
+    printf("result: %lld \n", num);
+    return 0;
+}
+
+void * thread_inc(void* arg)
+{
+    int i;
+    for(i=0; i<50000000; i++)
+        num+=1;
+    return NULL;
+}
+
+void * thread_des(void* arg)
+{
+    int i;
+    for(i=0; i<50000000; i++)
+        num-=1;
+    return NULL;
+}
+```
+
+![](assets/image-tr4.png)
+
+上述示例中共创建了100个线程，其中一半执行`thread_inc`函数中的代码，另一半则执行`thread_des`函数中的代码。全局变量`num`经过删减过程后应为0,但实际结果明显有问题。这就算我们接下来需要解决的问题。
+
+
+### 18.3 线程存在的问题和临界区
+
+#### 多个线程访问同一变量问题
+
+示例`thread4.c`的问题在于，**2个线程同时访问全局变量`num`**。此处的“访问”是指**值的修改**。虽然实例中访问的对象是全局变量，但这并非全局变量引发的问题。任何内存空间————只要**被同时访问**，都可能发生问题。下面解释“同时访问”的含义。
+
+（由于内容很多在此以截图形式叙述）
+
+<img src="assets/image-18.8.jpg" width="80%" alt="18-8">
+
+<img src="assets/image-18.12.jpg" width="80%" alt="18-12">
+
+
+#### 临界区位置
+
+划分临界区需要找到函数内同时运行多个线程时引起问题的多条语句构成的代码块。临界区通常位于**由线程运行的函数内部**。下面观察示例`thread4.c`中的2个main函数。
+
+``` c
+void * thread_inc(void* arg)
+{
+    int i;
+    for(i=0; i<50000000; i++)
+        num+=1;  //临界区
+    return NULL;
+}
+
+void * thread_des(void* arg)
+{
+    int i;
+    for(i=0; i<50000000; i++)
+        num-=1;  //临界区
+    return NULL;
+}
+```
+
+由代码注释可知，临界区并非全局变量`num`本身，而是**访问`num`**的2条语句。这2条语句可能由多个线程同时运行，也是引起问题的直接原因。产生的问题可以整理为如下3种情况。
+- 2个线程同时执行`thread_inc`函数。
+- 2个线程同时执行`thread_des`函数。
+- 2个线程分别执行`thread_inc`函数和`thread_des`函数。
+
+最后一点意味着线程1执行`thread_inc`函数的`num+=1`时，线程2执行`thread_des`函数的`num-=1`语句。也就是说，2条不同语句由不同线程同时执行时，也有可能构成临界区。前提是这2条语句访问同一内存空间。
+
+
+### 18.4 线程同步
+
+前面探讨了线程存在的问题，接下来讨论解决方法————线程同步。
+
+
+#### 同步的两面性
+
+线程同步用于解决**线程访问顺序**引发的问题。需要同步的情况可以从如下两方面考虑。
+
+- 同时访问同一内存空间时发生的情况。
+- 需要指定访问同一内存空间的线程执行顺序的情况。
+
+之前已讲过第一种情况，因而在此讨论第二种情况。若有A、B两个线程，A负责向指定内存空间写入数据，B负责取走该数据。若线程B先访问并取走数据，则会导致错误结果。像这种需要**控制执行顺序**的情况也需要使用同步技术。
+
+
+#### 互斥量
+
+互斥量（Mutual Exclusion）表示**不允许多个线程同时访问**。互斥量主要用于解决**线程同步访问**的问题。
+
+线程中为了保护临界区需要**锁机制**。互斥量就是一把优秀的锁，接下来介绍互斥量的创建及销毁函数。
+
+``` c
+#include <pthread.h>
+
+int pthread_mutex_init(pthread_mutex_t * mutex, const pthread_mutexattr_t * attr);
+int pthread_destroy(pthread_mutex_t * mutex);
+//成功时返回0,失败时返回其他值
+```
+- `mutex` 创建互斥量时传递保存互斥量的变量地址值，销毁时需传递需要销毁的互斥量地址值。
+- `attr` 传递即将创建的互斥量属性，没有特别需要指定的属性时传递`NULL`。
+
+为了创建相当于锁系统的互斥量，需要声明如下`pthread_mutex_t`变量：
+
+`pthread_mutex_t mutex;`
+
+将变量的**地址值**传递给`pthread_mutex_init`函数，用来**保存操作系统创建的互斥量**（锁系统）调用`pthread_mutex_destroy`函数时同样需要该信息，如果不需要配置特殊的互斥量属性，则向第二个参数传递NULL时，可以利用`PTHREAD_MUTEX_INITIALIZER`宏进行如下声明：
+
+`pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;`
+
+但更推荐使用`pthread_mutex_init`函数进行初始化，因为通过宏进行初始化很难发现发生的错误。
+
+接下来介绍利用互斥量**锁住或释放临界区**时使用的函数。
+
+``` c
+#include <pthread.h>
+
+int pthread_mutex_lock(pthread_mutex_t * mutex);
+int pthread_mutex_unlock(pthread_mutex_t * mutex);
+//成功时返回0,失败时返回其他值
+```
+
+进入临界区前调用的函数就是`pthread_mutex_lock`。调用该函数时，发现有其他线程已进入临界区，则`pthread_mutex_lock`函数不会返回，直到里面的线程调用`pthread_mutex_unlock`函数退出临界区为止。也就是说，**其他线程让出临界区之前，当前线程将一直处于阻塞状态**。
+
+接下来整理管理保护临界区的代码块编写方法。创建好互斥量的前提下，可以通过如下结构保护临界区。
+
+``` c
+pthread_mutex_lock(&mutex);
+//临界区的开始
+//. . . . .
+//临界区的结束
+pthread_mutex_unlock(&mutex);
+```
+
+简言之，就是利用lock和unlock函数围住临界区的两端。此时互斥量相当于一把锁，阻止多个线程同时访问。若线程退出临界区时忘了调用unlock函数，那么其他为了进入临界区而调用lock函数的线程就**无法摆脱阻塞状态**。这种情况称为“**死锁**”（Dead-lock）。
+
+接下来利用解决示例`thread4.c`中遇到的问题。
+
+**`mutex.c`**
+
+``` c
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <pthread.h>
+#define NUM_THREAD 100
+
+void * thread_inc(void* arg);
+void * thread_des(void* arg);
+long long num = 0;
+pthread_mutex_t mutex;  //声明保存互斥量读取的变量（全局变量）
+
+int main(int argc, char* argv[])
+{
+    pthread_t thread_id[NUM_THREAD];
+    int i;
+
+    pthread_mutex_init(&mutex, NULL);
+
+    printf("sizeof long long: %ld \n", sizeof(long long)); //查看long long的大小
+    for(i=0; i<NUM_THREAD; i++)
+    {
+        if(i%2)
+            pthread_create(&thread_id[i], NULL, thread_inc, NULL);
+        else
+            pthread_create(&thread_id[i], NULL, thread_des, NULL);
+    }
+    for(i=0; i<NUM_THREAD; i++)
+        pthread_join(thread_id[i], NULL);
+    
+    printf("result: %lld \n", num);
+    pthread_mutex_destroy(&mutex);  //销毁互斥量
+    return 0;
+}
+
+void * thread_inc(void* arg)
+{
+    int i;
+    pthread_mutex_lock(&mutex);
+    for(i=0; i<50000000; i++)
+        num+=1;
+    
+    pthread_mutex_unlock(&mutex);
+    return NULL;
+}
+
+void * thread_des(void* arg)
+{
+    int i;
+    pthread_mutex_lock(&mutex);
+    for(i=0; i<50000000; i++)
+        num-=1;
+    pthread_mutex_unlock(&mutex);
+    return NULL;
+}
+```
+
+![](assets/image-mutex.png)
+
+从运行结果可以看出，已解决了示例`thread4.c`中的问题。但确认运行结果需要等待较长时间。因为互斥量lock、unclock函数的调用过程比较花费时间。
+
+
+#### 信号量
+
+下面介绍信号量。信号量与互斥量极为相似，在互斥量的基础上很容易理解信号量。此处只涉及利用“二进制信号量”（只用0和1）完成“控制线程顺序”为中心的同步算法。下面给出信号量创建及销毁方法。
+
+``` c
+#include <semaphore.h>
+
+int sem_init(sem_t * sem, int pshared, unsigned int value);
+int sem_destroy(sem_t * sem);
+//成功时返回0,失败时返回其他值
+```
+- `sem` 创建信号量时传递保存信号量的变量地址值，销毁时传递需要销毁的信号量变量地址值
+- `pshared` 传递其他值时，创建可由多个进程共享的信号量；传递0时，创建**只允许1个进程**内部使用的信号量。此处传递0
+- `value` 指定新创建的信号量初始值
+
+上述函数的`pshared`参数超出了我们关注的范围，故默认向其传递 `0`。稍后讲解通过`value`参数初始化的信号量值究竟是多少 。 接下来介绍信号量中相当于互斥量lock、unlock的函数。
+
+``` c
+#include <semaphore.h>
+
+int sem_post(sem_t * sem);
+int sem_wait(sem_t * sem);
+//成功时返回0，失败时返回其他值
+```
+
+调用`sem_init`函数时，操作系统将创建信号量对象，此对象中记录着“信号值量”（Semaphore Value）整数。该值在调用`sem_post`函数时增1,调用`sem_wait`函数时减1。但信号量值不能小于0,因此**在信号量为0**的情况下调用`sem_wait`函数，调用函数的线程将进入**阻塞状态**（因为函数未返回）。若此时有其他线程调用`sem_post`函数，信号量的值将变为1,而原本阻塞的线程可以将该信号量重新减为0并**跳出阻塞状态**。实际上就是通过这种特性完成**临界区的同步操作**，可以通过如下形式同步临界区（假设信号量初始值为1）。
+
+``` c
+sem_wait(&sem);  //信号量变为0
+//临界区的开始
+//. . . . .
+//临界区的结束
+sem_post(&sen);  //信号量变为1
+```
+
+上述代码结构中，调用`sem-wait`函数进入临界区的线程在调用`sem_post`函数前**不允许其他线程进入临界区**。信号量的值在0和1之间跳转 ，因此具有这种特性的机制称为" **二进制信号量**"。接下来给出信号量相关示例。即将介绍的示例并非关于同时访问的同步，而是关于**控制访问序的同步**。该示例的场景如下：
+
+“线程A从用户输入得到值后存入全局变量num，此时线程B将取走该值并累加。该过程共进行5次，完成后输出总和并退出程序 。”
+
+为了按照上述要求构建程序，应按照线程A、线程B的顺序访问变量num，且需要线程同步。接下来给出示例。
+
+**`semaphore.c`**
+
+``` c
+#include <stdio.h>
+#include <pthread.h>
+#include <semaphore.h>
+
+void * read(void * arg);
+void * accu(void * arg);
+static sem_t sem_one;
+static sem_t sem_two;
+static int num;
+
+int main(int argc, char* argv[])
+{
+    pthread_t id_t1, id_t2;
+    sem_init(&sem_one, 0, 0);
+    sem_init(&sem_two, 0, 1);
+
+    pthread_create(&id_t1, NULL, read, NULL);
+    pthread_create(&id_t2, NULL, accu, NULL);
+
+    pthread_join(id_t1, NULL);
+    pthread_join(id_t2, NULL);
+
+    sem_destroy(&sem_one);
+    sem_destroy(&sem_two);
+    return 0;
+}
+
+void * read(void * arg)
+{
+    int i;
+    for(i=0; i<5; i++)
+    {
+        fputs("Input num: ", stdout);
+
+        sem_wait(&sem_two);
+        scanf("%d", &num);
+        sem_post(&sem_one);
+    }
+    return NULL;
+}
+
+void * accu(void * arg)
+{
+    int sum = 0, i;
+    for(i=0; i<5; i++)
+    {
+        sem_wait(&sem_one);
+        sum += num;
+        sem_post(&sem_two);
+    }
+    printf("Result: %d \n", sum);
+    return NULL;
+}
+```
+
+![](assets/image-sema.png)
+
+**为什么需要两个信号量：**
+
+两个信号量 (`sem_one` 和 `sem_two`) 的作用是**协调两个线程的执行顺序，避免竞争条件**，并确保数据的正确性。
+
+首先须知，调用`sem_post`函数时信号值量**增1**,调用`sem_wait`函数时信号值量**减1**。
+
+**信号量的作用**：
+- `sem_two`：初始值为 1，表示 `read` 线程可以立即执行（先获取锁并读取数据）。
+- `sem_one`：初始值为 0，表示 `accu` 线程必须等待 `read` 线程先写入数据后才能执行。
+
+**执行流程**：
+1. read 线程：
+   - 调用 `sem_wait(&sem_two)`，由于 `sem_two` 初始值为 1，它**成功获取锁**，继续执行。
+   - 读取用户输入的 `num`。
+   - 调用 `sem_post(&sem_one)`，释放 `sem_one`，允许 `accu` 线程继续执行。
+2. accu 线程：
+   - 调用 `sem_wait(&sem_one)`，由于 `sem_one` 初始值为 0，它会**阻塞**，直到 `read` 线程调用 `sem_post(&sem_one)`。
+   - 获取 `num` 并累加到 `sum`。
+   - 调用 `sem_post(&sem_two)`，释放 `sem_two`，允许 `read` 线程继续执行。
+
+这样，**两个线程交替执行，确保 `read` 先写入数据，`accu` 再读取数据**，避免数据竞争。
+
+
+### 18.5 线程的销毁和多线程并发服务器端的实现
+
+#### 销毁线程的3种方法
+
+Linux线程并不是在首次调用的线程main函数返回时自动销毁，所有用如下2种方法之一加以明确。否则由线程创建的内存空间将一直存在。
+- 调用 `pthread_join` 函数。
+- 调用 `pthread_detach` 函数。
+
+调用`pthread_join`函数时，不仅会等待线程终止，还会引导线程销毁。但该函数的问题是，**线程终止前，调用该函数的线程将进入阻塞状态**。因此通常通过如下函数调用引导线程销毁。
+
+``` c
+#include <pthread.c>
+
+int pthread_detach(pthread_t thread);
+//成功时返回0,失败时返回其他值
+```
+- `thread` 终止的同时需要销毁的线程ID。
+
+调用上述函数时**不会引起线程终止或进入阻塞状态**，可以通过该函数引导销毁线程创建的内存空间。需要注意的是调用该函数后不能再针对相应线程调用`pthread_join`函数。
+
+
+#### 多线程并发服务器端的实现
+
+本节主要介绍多个客户端之间交换信息的简单聊天程序。希望可通过本示例复习线程的使用方法及同步的处理方法，还可以再次思考临界区的处理方式。
+
+``` c
+
+```
+
+``` c
+
+```
+
+![](assets/image-cserv.png)
+
+![](assets/image-cclnt1.png)
+
+![](assets/image-cclnt2.png)
+
+![](assets/image-cclnt3.png)

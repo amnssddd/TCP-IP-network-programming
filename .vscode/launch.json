@@ -7,9 +7,9 @@
       "request": "launch",
       "args": [],
       "stopAtEntry": false,
-      "externalConsole": true,
-      "cwd": "e:/Repo/Github/TCP-IP-network-programming/5.3（win）",
-      "program": "e:/Repo/Github/TCP-IP-network-programming/5.3（win）/build/Debug/outDebug",
+      "externalConsole": false,
+      "cwd": "/home/dinghaifeng/桌面/Repo/github/TCP-IP-network-programming/18.2",
+      "program": "/home/dinghaifeng/桌面/Repo/github/TCP-IP-network-programming/18.2/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
