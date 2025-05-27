@@ -20,7 +20,7 @@ int main(int argc, char* argv[])
     int sock;
     struct sockaddr_in serv_addr;
     pthread_t snd_thread, rcv_thread;
-    void * thread_return;
+    void * thread_return;  //当线程结束时，线程函数的返回值会被存入 thread_return 指向的内存。此处并未使用。
     if(argc!=4)
     {
         printf("Usage : %s <IP> <port> <name>\n", argv[0]); 
@@ -57,6 +57,7 @@ void * send_msg(void * arg)  //send thread main
             close(sock);
             exit(0);
         }
+        //将客户端的名称(name)和输入的消息(msg)格式化为一个字符串，存储在name_msg缓冲区中
         sprintf(name_msg, "%s %s", name, msg);
         write(sock, name_msg, sizeof(name_msg));
     }

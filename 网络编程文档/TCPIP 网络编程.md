@@ -11062,12 +11062,210 @@ int pthread_detach(pthread_t thread);
 
 本节主要介绍多个客户端之间交换信息的简单聊天程序。希望可通过本示例复习线程的使用方法及同步的处理方法，还可以再次思考临界区的处理方式。
 
-``` c
+**`chat_server.c`**
 
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <pthread.h>
+#define BUF_SIZE 100
+#define MAX_CLNT 256
+
+void * handle_clnt(void * arg);
+void send_msg(char * msg, int len);
+void error_handling(char * msg);
+
+//用于管理接入的客户端套接字的变量和数组。访问这两个变量的代码将构成临界区
+int clnt_cnt = 0;
+int clnt_socks[MAX_CLNT];
+
+pthread_mutex_t mutx;
+
+int main(int argc, char* argv[])
+{
+    int serv_sock, clnt_sock;
+    struct sockaddr_in serv_adr, clnt_adr;
+    int clnt_adr_sz;
+    pthread_t t_id;
+    if(argc!=2)
+    {
+        printf("Usage : %s <port>\n", argv[0]); 
+        exit(1);
+    }
+
+    pthread_mutex_init(&mutx, NULL);
+    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+
+    memset(&serv_adr, 0, sizeof(serv_adr));
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_adr.sin_port = htons(atoi(argv[1]));
+
+    if((bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr))) == -1)
+        error_handling("bind() error!");
+    if(listen(serv_sock, 5) == -1)
+        error_handling("listen() error!");
+
+    while(1)
+    {
+        clnt_adr_sz = sizeof(clnt_adr);
+        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+    
+        pthread_mutex_lock(&mutx);
+        clnt_socks[clnt_cnt++] = clnt_sock;  //每当有新连接时，将相关信息写入变量clnt_cnt和clnt_socks
+        pthread_mutex_unlock(&mutx);
+
+        //创建线程向新接入的客户端提供服务。由该线程执行handle_cnt函数
+        pthread_create(&t_id, NULL, handle_clnt, (void*)&clnt_sock);
+        //调用pthread_detach函数从内存中完全销毁已终止的线程
+        pthread_detach(t_id);
+        printf("Connected client IP: %s \n", inet_ntoa(clnt_adr.sin_addr));
+    }
+    close(serv_sock);
+    return 0;
+}
+
+//处理单个客户端连接，负责接收客户端消息并处理客户端断开连接
+void * handle_clnt(void * arg)
+{
+    int clnt_sock = *((int*)arg);
+    int str_len = 0, i;
+    char msg[BUF_SIZE];
+
+    //读取客户端信息并广播给所有客户端
+    while((str_len=read(clnt_sock, msg, sizeof(msg))) != 0)
+        send_msg(msg, str_len);
+
+    //客户端断开
+    pthread_mutex_lock(&mutx);
+    for(i=0; i<clnt_cnt; i++)  // 遍历查找要删除的客户端
+    {
+        if(clnt_sock == clnt_socks[i])  // 找到匹配的socket
+        {
+            while(i++<clnt_cnt-1)  // 从找到位置开始前移元素
+                clnt_socks[i]=clnt_socks[i+1];
+            break;
+        }
+    }
+    clnt_cnt--;  // 客户端计数减1
+    pthread_mutex_unlock(&mutx);
+    close(clnt_sock);  // 关闭socket
+    return NULL;
+}
+
+//该函数负责向所有连接的客户端发送消息
+void send_msg(char * msg, int len)  //send to all
+{
+    int i;
+    pthread_mutex_lock(&mutx);
+    for(i=0; i<clnt_cnt; i++)
+        write(clnt_socks[i], msg, len);
+    pthread_mutex_unlock(&mutx);
+}
+
+void error_handling(char * msg)
+{
+    fputs(msg, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
 ```
 
-``` c
+**`chat_clnt.c`**
 
+``` c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <pthread.h>
+#define BUF_SIZE 100
+#define NAME_SIZE 20
+
+void * send_msg(void * arg);
+void * recv_msg(void * arg);
+void error_handling(char * msg);
+
+char name[NAME_SIZE] = "[DEFAULT]";
+char msg[BUF_SIZE];
+
+int main(int argc, char* argv[])
+{
+    int sock;
+    struct sockaddr_in serv_addr;
+    pthread_t snd_thread, rcv_thread;
+    void * thread_return;  //当线程结束时，线程函数的返回值会被存入 thread_return 指向的内存。此处并未使用。
+    if(argc!=4)
+    {
+        printf("Usage : %s <IP> <port> <name>\n", argv[0]); 
+        exit(1);
+    }
+
+    sprintf(name, "[%s]", argv[3]);
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    memset(&serv_addr, 0 ,sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr(argv[1]);
+    serv_addr.sin_port = htons(atoi(argv[2]));
+
+    if(connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1)
+        error_handling("connect() error!");
+
+    pthread_create(&snd_thread, NULL, send_msg, (void*)&sock);
+    pthread_create(&rcv_thread, NULL, recv_msg, (void*)&sock);
+    pthread_join(snd_thread, &thread_return);
+    pthread_join(rcv_thread, &thread_return);
+    close(sock);
+    return 0;
+}
+
+void * send_msg(void * arg)  //send thread main
+{
+    int sock = *((int*)arg);
+    char name_msg[NAME_SIZE+BUF_SIZE];
+    while(1)
+    {
+        fgets(msg, BUF_SIZE, stdin);
+        if(!strcmp(msg,"q\n")||!strcmp(msg,"Q\n"))
+        {
+            close(sock);
+            exit(0);
+        }
+        //将客户端的名称(name)和输入的消息(msg)格式化为一个字符串，存储在name_msg缓冲区中
+        sprintf(name_msg, "%s %s", name, msg);
+        write(sock, name_msg, sizeof(name_msg));
+    }
+    return NULL;
+}
+
+void * recv_msg(void * arg)  //recv thread main
+{
+    int sock = *((int*)arg);
+    char name_msg[NAME_SIZE+BUF_SIZE];
+    int str_len;
+    while(1)
+    {
+        str_len = read(sock, name_msg, NAME_SIZE+BUF_SIZE-1);
+        if(str_len == -1)
+            return (void*)-1;
+        name_msg[str_len] = 0;
+        fputs(name_msg, stdout);
+    }
+    return NULL;
+}
+
+void error_handling(char * msg)
+{
+    fputs(msg, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
 ```
 
 ![](assets/image-cserv.png)
@@ -11077,3 +11275,83 @@ int pthread_detach(pthread_t thread);
 ![](assets/image-cclnt2.png)
 
 ![](assets/image-cclnt3.png)
+
+在聊天服务器中，**客户端的断开**是至关重要的一部分，现对其进行详解。
+
+相关代码：
+``` c
+pthread_mutex_lock(&mutx);
+for(i=0; i<clnt_cnt; i++)  // 遍历查找要删除的客户端
+{
+    if(clnt_sock == clnt_socks[i])  // 找到匹配的socket
+    {
+        while(i++<clnt_cnt-1)  // 从找到位置开始前移元素
+            clnt_socks[i]=clnt_socks[i+1];
+        break;
+    }
+}
+clnt_cnt--;  // 客户端计数减1
+pthread_mutex_unlock(&mutx);
+close(clnt_sock);  // 关闭socket
+```
+
+**处理流程解析：**
+
+**1. 检测到客户端断开**
+  - 当 `read(clnt_sock, msg, sizeof(msg))` 返回0时，表示客户端已断开连接
+  - 循环终止，进入断开处理流程
+
+**2. 加锁保护共享资源**
+``` c
+pthread_mutex_lock(&mutx);
+```
+  - 获取互斥锁，确保在修改 `clnt_socks` 数组和 `clnt_cnt` 时不会有其他线程同时访问
+  - 防止数据竞争和状态不一致
+
+**3. 查找要删除的客户端**
+``` c
+for(i=0; i<clnt_cnt; i++)
+{
+    if(clnt_sock == clnt_socks[i])
+    {
+        // 找到后的处理
+        break;
+    }
+}
+```
+  - 线性遍历 `clnt_socks` 数组
+  - 比较每个元素与当前客户端的socket描述符
+  - 找到匹配项后立即跳出循环
+
+**4. 从数组中移除客户端**
+``` c
+while(i++<clnt_cnt-1)
+    clnt_socks[i]=clnt_socks[i+1];
+```
+  - 这是一个高效的**数组元素删除算法**
+  - 从找到的位置(i)开始，将后续元素逐个前移
+  - 例如：删除索引2的元素
+    ```
+    删除前: [sock1, sock2, sock3, sock4, sock5] (clnt_cnt=5)
+    删除过程:
+    i=2: clnt_socks[2]=clnt_socks[3] → [s1, s2, s4, s4, s5]
+    i=3: clnt_socks[3]=clnt_socks[4] → [s1, s2, s4, s5, s5]
+    循环结束
+    ```
+  - 最终结果：[sock1, sock2, sock4, sock5, sock5] (clnt_cnt将减为4)
+
+**5. 更新客户端计数**
+``` c
+clnt_cnt--;
+```
+  - 将全局客户端计数器减1
+  - 确保后续操作不会访问到被删除的客户端
+
+6. 释放锁并关闭套接字
+``` c
+pthread_mutex_unlock(&mutx);
+close(clnt_sock);  // 关闭socket
+```
+  - 释放互斥锁，允许其他线程访问共享资源
+  - 关闭已断开客户端的socket描述符，释放系统资源
+
