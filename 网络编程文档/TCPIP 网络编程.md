@@ -11355,3 +11355,127 @@ close(clnt_sock);  // 关闭socket
   - 释放互斥锁，允许其他线程访问共享资源
   - 关闭已断开客户端的socket描述符，释放系统资源
 
+
+#### 死锁
+
+死锁是指 **多个进程（或线程）在执行过程中，因争夺资源而陷入互相等待的状态，导致所有进程都无法继续执行**。
+
+死锁的 **四个必要条件（必须全部满足才会发生死锁**）：
+1. **互斥条件（Mutual Exclusion）**：资源一次只能被一个进程占用。
+2. **占有并等待（Hold and Wait）**：进程持有至少一个资源，同时等待获取其他被占用的资源。
+3. **非抢占条件（No Preemption）**：已分配给进程的资源不能被强行剥夺，必须由进程主动释放。
+4. **循环等待（Circular Wait）**：多个进程之间形成一种头尾相接的循环等待关系。
+
+死锁情况的伪代码
+``` c
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
+
+pthread_t t_id1;
+pthread_t t_id2;
+
+pthread_mutex_t mutex_1;
+pthread_mutex_init(mutex_1);
+pthread_mutex_t mutex_2;
+pthread_mutex_init(mutex_2);
+
+void Loop2();
+
+void Loop1() {
+    pthread_mutex_lock(mutex_1);
+    pthread_create(&t_id1, NULL, (void*)Loop2, NULL);
+    sleep(1);
+    pthread_mutex_lock(mutex_2);
+    puts("1");
+}
+
+void Loop2() {
+    pthread_mutex_lock(mutex_2);
+    pthread_mutex_lock(mutex_1);
+    puts("2");
+}
+
+int main() {
+    pthread_create(&t_id2, NULL, (void*)Loop1, NULL);
+    while (1) {
+
+    }
+}
+```
+此时线程1等线程2释放`mutex_1`，线程2等线程1释放`mutex_2`，形成**循环等待**，造成死锁。
+
+死锁在多线程中是需要避免的问题，应引起注意。
+
+有关Windows下的线程同步在此跳过。
+
+
+## 21 异步通知 I/O 模型
+
+### 21.1 理解同步和异步
+
+同步的关键是**函数调用及返回时刻**，以及**数据传输的开始和完成时间**。
+
+调用`send`函数的瞬间开始传输数据，`send`函数执行完（返回）的时刻完成数据传输。
+
+调用`recv`函数的瞬间开始接收数据，`recv`函数执行完（返回）的时刻完成数据接收。
+
+可通过图21-1解释上述两句话的含义（上述语句和图中的“完成传输”均指**数据完全传输到输出缓冲**）
+
+<img src="assets/image-21.1.png" width="40%" alt="21-1">
+
+异步 I/O 的含义在图21-2给出解释。可以将两张图作为对比。
+
+<img src="assets/image-21.2.png" width="40%" alt="21-2">
+
+从图21-2可以看出，异步I/O是指**I/O函数的返回时刻与数据收发的完成时刻不一致**。17章`epoll`函数部分有提到过。
+
+同步I/O的缺点是**进行I/O过程中的函数无法返回**，所以无法进行其他任务。而图21-2中异步I/O中，**无论数据是否完成交换都返回函数**，这就意味着可以执行其他任务。说明异步方式比同步更能有效地利用CPU。
+
+
+#### 理解异步通知 I/O 模型
+
+通知I/O的含义：“通知输入缓冲收到数据并需要读取，以及输出缓冲为空故可以发送数据。”
+
+通知I/O是指发生了I/O相关的特定情况。典型的通知I/O模型是`select`方式。`select`函数就是从返回调用的函数时通知需要I/O处理的，或可以进行I/O处理的情况。但这种通知是以**同步**方式进行的。原因在于，需要I/O或可以进行I/O的时间点（I/O相关事件发生的时间点）与`select`函数的返回时间点一致。
+
+异步通知I/O模型中**函数的返回与I/O状态无关**。异步通知I/O中，指定I/O监视对象的函数和实际验证状态变化的函数是相互分离的。因此，指定监视对象后可以离开执行其他任务，最后再回来验证状态变化。
+
+
+### 21.2 理解和实现异步通知 I/O 模型
+
+异步通知I/O模型的实现方法有2种：`WSAEventSelect`函数和`WSAAsyncSelect`函数。使用后者需要指定Windows句柄以获取发生的事件（UI相关内容），因此此处不会涉及。在此主要讲解`WSAEventSelect`函数。
+
+
+#### WSAEventSelect 函数和通知
+
+如前所述，告知I/O状态变化的操作就是“通知”。I/O的状态变化可以分为不同情况。
+- **套接字的状态变化**：套接字的I/O状态变化。
+- **发生套接字相关事件**：发生套接字I/O相关事件。
+
+下面介绍`WSAEventSelect`函数，该函数用于**指定某一套接字为事件监视对象**。
+
+``` c
+#include <winsock2.h>
+
+int WSAEventSelect(SOCKET s, WSAEVENT hEventObject, long lNetworkEvents);
+//成功时返回0，失败时返回SOCKET_ERROR
+```
+- `s` 监视对象的套接字句柄
+- `hEventObject` 传递事件对象句柄以验证事件发生与否
+- `lNetworkEvents` 希望监视的事件类型信息
+
+传入参数`s`的套接字内只要发生`INetworkEvents`中指定的信息之一，`WSAEventSelect`函数就将`hEventObject`句柄所指的内核对象改为 **`signaled`**状态。因此该函数又称为“连接事件对象和套接字的函数”。此外，无论事件发生与否，`WSAEventSelect`函数调用后都会直接返回，所有可以执行其他任务。也就是说，该函数以**异步通知**方式工作。
+
+下面介绍作为该函数的第三个参数的**事件类型信息**，可以通过**位或运算**同时指定多个信息。
+- `FD_READ`：是否存在需要接收的数据？
+- `FD_WRITE`：是否以非阻塞方式传输数据？
+- `FD_OOB`：是否收到带外数据?
+- `FD_ACCEPT`：是否有新的连接请求？
+- `FD_CLOSE`：是否有断开连接的请求？
+
+从前面关于`WSAEventSelect`函数的说明中可以看出，需要补充如下内容：
+- `WSAEventSelect`函数的第二个参数中用到的**事件对象的创建方法**。
+- 调用`WSAEventSelect`函数后**发生事件的验证方法**。
+- 验证事件发生后**事件类型的查看方法**。
+
